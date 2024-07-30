@@ -1,0 +1,85 @@
+package main
+
+import (
+	"bufio"
+	"log"
+	"net"
+
+	"github.com/valyala/fasthttp"
+)
+
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	writer := bufio.NewWriter(conn)
+
+	for {
+		var req fasthttp.Request
+		var resp fasthttp.Response
+
+		// 读取请求
+		if err := req.Read(reader); err != nil {
+			// 检查错误是否是 EOF 或连接关闭
+			if err == fasthttp.ErrConnectionClosed || err == bufio.ErrBufferFull {
+				log.Printf("Connection closed: %s", err)
+				return
+			}
+
+			log.Printf("Error reading request: %s", err)
+			resp.SetStatusCode(fasthttp.StatusBadRequest)
+			resp.SetBodyString("Bad Request")
+			if _, err := resp.WriteTo(writer); err != nil {
+				log.Printf("Error writing response: %s", err)
+				return
+			}
+			writer.Flush()
+			return
+		}
+
+		// 处理请求并生成响应
+		switch string(req.URI().Path()) {
+		case "/":
+			resp.SetBodyString("Hello, World!")
+		default:
+			resp.SetStatusCode(fasthttp.StatusNotFound)
+			resp.SetBodyString("Unsupported path")
+		}
+
+		// 将响应写入连接
+		if _, err := resp.WriteTo(writer); err != nil {
+			log.Printf("Error writing response: %s", err)
+			return
+		}
+
+		if err := writer.Flush(); err != nil {
+			log.Printf("Error flushing writer: %s", err)
+			return
+		}
+
+		// 如果请求中包含 "Connection: close" 头部，则关闭连接
+		if req.Header.ConnectionClose() {
+			return
+		}
+	}
+}
+
+func main() {
+	listener, err := net.Listen("tcp", ":8080")
+	if err != nil {
+		log.Fatalf("Error creating listener: %s", err)
+	}
+	defer listener.Close()
+
+	log.Println("Server is listening on :8080")
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("Error accepting connection: %s", err)
+			continue
+		}
+
+		go handleConnection(conn)
+	}
+}

@@ -1,0 +1,70 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"strings"
+
+	"github.com/valyala/fasthttp"
+)
+
+// func main() {
+// 	ln, err := net.Listen("tcp", ":8084")
+// 	if err != nil {
+// 		fmt.Println("Error setting up TCP listener:", err)
+// 		return
+// 	}
+// 	defer ln.Close()
+
+// 	fmt.Println("Listening on :8080")
+
+// 	for {
+// 		conn, err := ln.Accept()
+// 		if err != nil {
+// 			fmt.Println("Error accepting connection:", err)
+// 			continue
+// 		}
+
+// 		go handleConnection5(conn)
+// 	}
+// }
+
+func handleConnection5(conn net.Conn) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	for {
+		var req fasthttp.Request
+		if err := req.Read(reader); err != nil {
+			log.Printf("Error in Request Read: %s", err)
+			return
+		}
+
+		req.Header.VisitAll(func(key, value []byte) {
+			fmt.Printf("%s: %s\n", key, value)
+		})
+
+		body := req.BodyStream()
+
+		// Process the request body (for example, just read and log it)
+		data, _ := io.ReadAll(body)
+		str := string(data)
+		str = strings.Replace(str, "\r", "\\r", -1)
+		str = strings.Replace(str, "\n", "\\n", -1)
+		str = strings.Replace(str, "\t", "\\t", -1)
+		fmt.Println("bbody " + str)
+
+		// Create a response
+		var res fasthttp.Response
+		res.SetStatusCode(fasthttp.StatusOK)
+		res.SetBody([]byte("Hello, World!"))
+
+		// Write the response
+		if _, err := res.WriteTo(conn); err != nil {
+			log.Printf("Error writing response: %s", err)
+		}
+	}
+
+}
