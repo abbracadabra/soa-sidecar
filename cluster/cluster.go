@@ -3,13 +3,13 @@ package cluster
 import "test/connPool"
 
 type LbStrategy interface {
-	Choose() (*Instance, error)
+	Choose() *Instance
 }
 
 type Instance struct {
 	cluster Cluster
-	ip      string
-	port    int
+	IP      string
+	Port    int
 	Pool    *connPool.ConnPool
 	tags    *map[string]string
 }
@@ -20,14 +20,17 @@ type Cluster struct {
 	Lb        LbStrategy
 }
 
-func FindByName(name string) (*Cluster, error) {
+func FindByName(name string) *Cluster {
 
+	// already
 	c := clusters[name]
 	if c != nil {
-		return c, nil
+		return c
 	}
-	// nacos todo
-	return nil, nil
+
+	// nacos todo get and listen
+	// warm up conn
+	return nil
 
 }
 

@@ -9,13 +9,13 @@ type RoundRobin struct {
 	mu      sync.Mutex
 }
 
-func (r *RoundRobin) choose() (*Instance, error) {
+func (r *RoundRobin) Choose() *Instance {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// 选择当前索引的worker
 	w := (*r.cluster.instances)[r.current]
 	r.current = (r.current + 1) % len(*r.cluster.instances)
-	return &w, nil
+	return &w
 }
 
 func NewRoundRobin(cluster *Cluster) *RoundRobin {

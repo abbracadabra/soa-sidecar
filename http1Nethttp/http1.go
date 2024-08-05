@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"test/cluster"
 )
 
 func main() {
@@ -50,12 +52,12 @@ func handleServerInbound(r *http.Request, conn net.Conn) {
 
 	defer r.Body.Close()
 	// optional transcoding
-	clusterName := "example"
-	getCluster(clusterName)
-	loadBalance()
+	cls := cluster.FindByName("example")
+	ins := cls.Lb.Choose()
 
-	req, err := http.NewRequest(r.Method, getFullURL(r, "127.0.0.1:12345"), r.Body)
-	// req.Host = "www.example.com"
+	addr := ins.IP + ":" + strconv.Itoa(ins.Port)
+	req, err := http.NewRequest(r.Method, getFullURL(r, addr), r.Body)
+	req.Host = r.Host
 	if err != nil {
 		panic(err)
 	}

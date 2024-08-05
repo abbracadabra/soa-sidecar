@@ -1,25 +1,24 @@
 package connPool
 
 import (
+	"errors"
 	"net"
+	"sync"
 	"time"
 	// cmap "github.com/orcaman/concurrent-map/v2"
 )
 
 type PoolConn struct {
+	unhealthy   bool
 	Conn        net.Conn
 	lastPutTime time.Time
-	// ActiveReqs  map[string]*Req
 }
 
 type ConnPool struct {
-	// mu              sync.Mutex
 	freeConns       chan *PoolConn
-	active          int
 	maxConns        int
 	factory         func() (net.Conn, error)
 	maxFreeDuration time.Duration
-	waitDuration    time.Duration
 }
 
 func NewConnPool(active, maxConns int, maxFreeDuration, waitDuration time.Duration, factory func() (net.Conn, error)) *ConnPool {
@@ -28,9 +27,8 @@ func NewConnPool(active, maxConns int, maxFreeDuration, waitDuration time.Durati
 		maxConns:        maxConns,
 		factory:         factory,
 		maxFreeDuration: maxFreeDuration,
-		waitDuration:    waitDuration,
 	}
-	go pool.cleaner() // 启动清理空闲连接的 goroutine
+	go pool.cleaner() // 启动清理空闲连接的
 	return pool
 }
 
@@ -42,49 +40,32 @@ func (p *ConnPool) cleaner() {
 		for pc := range p.freeConns {
 			if time.Since(pc.lastPutTime) > p.maxFreeDuration {
 				pc.Conn.Close()
-				p.active--
 			} else {
-				p.GiveBack(pc.Conn, false)
+				p.giveBack(pc.Conn, false)
 			}
 		}
 	}
 }
 
-func (p *ConnPool) Get() net.Conn {
+func (p *ConnPool) Get(waitTime time.Duration) (net.Conn, func(bool), error) {
 	select {
 	case pc := <-p.freeConns:
-		p.active++
-		return pc.Conn
-	default:
-		if len(p.freeConns)+p.active < p.maxConns {
-			conn, _ := p.factory()
-			if conn != nil {
-				p.active++
-				return conn
-			}
-		}
-		select {
-		case pc := <-p.freeConns:
-			p.active++
-			return pc.Conn
-		case <-time.After(p.waitDuration):
-			return nil
-		}
+		var once sync.Once
+		return pc.Conn, func(broken bool) {
+			//防止多次调用
+			once.Do(func() {
+				p.giveBack(pc.Conn, broken)
+			})
+		}, nil
+	case <-time.After(waitTime):
+		return nil, nil, errors.New("get conn time out")
 	}
 }
 
-// close：是否关闭连接
-func (p *ConnPool) GiveBack(conn net.Conn, close bool) {
+// broken：连接坏了不能再用
+func (p *ConnPool) giveBack(conn net.Conn, broken bool) {
 
-	defer func() {
-		p.active--
-	}()
-
-	if len(p.freeConns)+p.active >= p.maxConns {
-		conn.Close()
-		return
-	}
-	if close {
+	if broken {
 		conn.Close()
 		newConn, _ := p.factory()
 		if newConn == nil {
