@@ -14,25 +14,54 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-func Serve(conn net.Conn) error {
+func main() {
+	ln, err := net.Listen("tcp", ":8012")
+	if err != nil {
+		fmt.Println("Error setting up TCP listener:", err)
+		return
+	}
+	defer ln.Close()
+
+	fmt.Println("Listening on :8012")
+
 	var server = grpc.NewServer(
 		grpc.UnknownServiceHandler(handler),
 	)
+	fmt.Println("Serve(conn net.Conn) error {")
 	// ,grpc.Creds(creds)   tls server  https://github.com/devsu/grpc-proxy/blob/master/grpc-proxy.go
-	server.Serve(&newSingleConnListener{conn: conn})
-	return nil
+	server.Serve(ln)
+	// for {
+	// 	conn, err := ln.Accept()
+	// 	if err != nil {
+	// 		fmt.Println("Error accepting connection:", err)
+	// 		continue
+	// 	}
+
+	// 	go Serve(conn)
+	// }
 }
+
+// func Serve(conn net.Conn) error {
+// 	var server = grpc.NewServer(
+// 		grpc.UnknownServiceHandler(handler),
+// 	)
+// 	fmt.Println("Serve(conn net.Conn) error {")
+// 	// ,grpc.Creds(creds)   tls server  https://github.com/devsu/grpc-proxy/blob/master/grpc-proxy.go
+// 	server.Serve(&newSingleConnListener{conn: conn})
+// 	return nil
+// }
 
 func director(ctx context.Context, fullMethodName string) (context.Context, *grpc.ClientConn, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
+	//复制header，向上游stream发送header
 	outCtx := metadata.NewOutgoingContext(ctx, md.Copy())
 	//md[":authority"]
 
 	// cc, err := grpc.Dial(target, grpc.WithContextDialer(func(ctx context.Context, target string) (net.Conn, error) {
 	// 	return (&net.Dialer{}).DialContext(ctx, "tcp", target)
 	// }), grpc.WithInsecure())
-	// ctx只影响dialing过程
-	cc, err := grpc.DialContext(ctx, "api-service.prod.svc.local", grpc.WithCodec(Codec()))
+	// ctx结束后，grpc-go会断开连接
+	cc, err := grpc.DialContext(ctx, "localhost:50051", grpc.WithCodec(Codec()), grpc.WithInsecure())
 
 	// cc, err := grpc.NewClient(gclient.NewClientConfig{
 	// 	Target:      target,
@@ -44,6 +73,8 @@ func director(ctx context.Context, fullMethodName string) (context.Context, *grp
 
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
 func handler(srv interface{}, serverStream grpc.ServerStream) error {
+	fmt.Println("start handleinggggg")
+
 	// little bit of gRPC internals never hurt anyone
 	fullMethodName, ok := grpc.MethodFromServerStream(serverStream)
 	if !ok {
@@ -51,7 +82,6 @@ func handler(srv interface{}, serverStream grpc.ServerStream) error {
 	}
 	// We require that the director's returned context inherits from the serverStream.Context().
 	outgoingCtx, backendConn, err := director(serverStream.Context(), fullMethodName)
-	backendConn.Invoke()
 	if err != nil {
 		return err
 	}
@@ -94,6 +124,8 @@ func handler(srv interface{}, serverStream grpc.ServerStream) error {
 			// This happens when the clientStream has nothing else to offer (io.EOF), returned a gRPC error. In those two
 			// cases we may have received Trailers as part of the call. In case of other errors (stream closed) the trailers
 			// will be nil.
+			//trailer最后才能获取到
+			//发送trailer
 			serverStream.SetTrailer(clientStream.Trailer())
 			if c2sErr == io.EOF {
 				return nil
@@ -108,7 +140,6 @@ func handler(srv interface{}, serverStream grpc.ServerStream) error {
 func forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan error {
 	ret := make(chan error, 1)
 	go func() {
-		// 卧槽，这里要的是业务的pb类型！！！！！！！！！
 		f := &emptypb.Empty{}
 		for i := 0; ; i++ {
 			if err := src.RecvMsg(f); err != nil {
@@ -141,6 +172,8 @@ func forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan er
 func forwardServerToClient(src grpc.ServerStream, dst grpc.ClientStream) chan error {
 	ret := make(chan error, 1)
 	go func() {
+		//protoimpl.UnknownFields 是 protobuf 实现的一部分
+		//如果一个应用程序接收到一个包含未识别字段的消息，然后将该消息转发给其他服务，它可以保留这些未知字段并将它们包括在转发的消息中
 		f := &emptypb.Empty{}
 		for i := 0; ; i++ {
 			if err := src.RecvMsg(f); err != nil {
@@ -177,6 +210,46 @@ func (l *newSingleConnListener) Addr() net.Addr {
 	return l.conn.LocalAddr()
 }
 
+func Codec() grpc.Codec {
+	return CodecWithParent(&protoCodec{})
+}
+
+func CodecWithParent(fallback grpc.Codec) grpc.Codec {
+	return &rawCodec{fallback}
+}
+
+type rawCodec struct {
+	parentCodec grpc.Codec
+}
+
+type myMessage struct {
+	payload []byte
+}
+
+func (c *rawCodec) Marshal(v interface{}) ([]byte, error) {
+	out, ok := v.(*myMessage)
+	if !ok {
+		fmt.Println("use default codec")
+		return c.parentCodec.Marshal(v)
+	}
+	fmt.Println("use raw payload")
+	return out.payload, nil
+
+}
+
+func (c *rawCodec) Unmarshal(data []byte, v interface{}) error {
+	dst, ok := v.(*myMessage)
+	if !ok {
+		return c.parentCodec.Unmarshal(data, v)
+	}
+	dst.payload = data
+	return nil
+}
+
+func (c *rawCodec) String() string {
+	return fmt.Sprintf("proxy>%s", c.parentCodec.String())
+}
+
 type protoCodec struct{}
 
 func (protoCodec) Marshal(v interface{}) ([]byte, error) {
@@ -189,42 +262,4 @@ func (protoCodec) Unmarshal(data []byte, v interface{}) error {
 
 func (protoCodec) String() string {
 	return "proto"
-}
-
-func CodecWithParent(fallback grpc.Codec) grpc.Codec {
-	return &rawCodec{fallback}
-}
-
-type rawCodec struct {
-	parentCodec grpc.Codec
-}
-
-type frame struct {
-	payload []byte
-}
-
-func (c *rawCodec) Marshal(v interface{}) ([]byte, error) {
-	out, ok := v.(*frame)
-	if !ok {
-		return c.parentCodec.Marshal(v)
-	}
-	return out.payload, nil
-
-}
-
-func (c *rawCodec) Unmarshal(data []byte, v interface{}) error {
-	dst, ok := v.(*frame)
-	if !ok {
-		return c.parentCodec.Unmarshal(data, v)
-	}
-	dst.payload = data
-	return nil
-}
-
-func (c *rawCodec) String() string {
-	return fmt.Sprintf("proxy>%s", c.parentCodec.String())
-}
-
-func Codec() grpc.Codec {
-	return CodecWithParent(&protoCodec{})
 }

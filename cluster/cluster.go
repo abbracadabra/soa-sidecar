@@ -1,6 +1,6 @@
 package cluster
 
-import "test/connPool"
+import "test/connPool2/types"
 
 type LbStrategy interface {
 	Choose() *Instance
@@ -10,7 +10,7 @@ type Instance struct {
 	cluster Cluster
 	IP      string
 	Port    int
-	Pool    *connPool.ConnPool
+	Pool    *types.Pool
 	tags    *map[string]string
 }
 
