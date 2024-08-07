@@ -46,20 +46,16 @@ const (
 )
 
 type PoolConn struct {
-	state       State
-	idx         int // 在array中的位置
-	pool        *Pool
-	conn        *grpc.ClientConn
-	activeLease int //缩容时kill
-
-	//如果每个conn都有少量的qps lease,那就永远缩容不了了  。状态
+	state            State
+	idx              int // 在array中的位置
+	pool             *Pool
+	conn             *grpc.ClientConn
+	concurrentStream int
 }
 
 func (cp *PoolConn) Unhealthy() {
-	// cp.pool.Lock()
 	cp.pool.locks[cp.idx].Lock()
 	defer cp.pool.locks[cp.idx].Unlock()
-	// defer cp.pool.Unlock()
 	if cp.state == DEAD {
 		return
 	}
@@ -82,14 +78,13 @@ type Pool struct {
 	factory func() (*grpc.ClientConn, error)
 	conns   []*PoolConn
 	pos     int // roundrobin 位置
-	// targetQpsPerConn int // 用于连接池的扩缩容
-	// currentQps       int32
-	locks []sync.Mutex
+	locks   []sync.Mutex
 }
 
 // todo 是否全搞成ctx
 func (p *Pool) Get(waitTime time.Duration) (interface{}, error) {
 
+	//是否选取前者，触发其qps限制，后移位
 	c1, c2 := func() (*PoolConn, *PoolConn) {
 		p.Lock()
 		defer p.Unlock()
@@ -107,7 +102,6 @@ func (p *Pool) Get(waitTime time.Duration) (interface{}, error) {
 		return nil, dead
 	}()
 	if c1 != nil {
-		// atomic.AddInt32(&p.currentQps, 1)
 		return c1, nil
 	}
 	if c2 != nil {
