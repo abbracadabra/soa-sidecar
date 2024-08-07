@@ -15,14 +15,15 @@ import (
 
 type PoolConn struct {
 	sync.Mutex
-	Healthy     bool
 	Conn        net.Conn
 	pool        *Pool
+	healthy     bool
 	lastPutTime time.Time
 }
 
 type Pool struct {
 	freeConns       chan *PoolConn
+	deadConns       chan *PoolConn
 	factory         func() (net.Conn, error)
 	maxFreeDuration time.Duration
 }
@@ -47,12 +48,12 @@ func NewConnPool(init, maxConns int, maxFreeDuration, waitDuration time.Duration
 		for i := 0; i < init; i++ {
 			c, err := factory()
 			if err != nil {
-				pool.freeConns <- &PoolConn{
+				pool.deadConns <- &PoolConn{
 					pool: pool,
 				}
 			} else {
 				pool.freeConns <- &PoolConn{
-					Healthy:     true,
+					healthy:     true,
 					Conn:        c,
 					pool:        pool,
 					lastPutTime: time.Now(),
@@ -66,58 +67,74 @@ func NewConnPool(init, maxConns int, maxFreeDuration, waitDuration time.Duration
 		}
 	}()
 
+	go func() {
+		ticker := time.NewTicker(pool.maxFreeDuration / 3)
+		defer ticker.Stop()
+
+		for range ticker.C {
+		Loop:
+			for {
+				select {
+				case pc := <-pool.freeConns:
+					if time.Since(pc.lastPutTime) > maxFreeDuration {
+						pc.Conn.Close()
+						pc.healthy = false
+						pool.deadConns <- pc
+					} else {
+						pool.freeConns <- pc
+					}
+				default:
+					break Loop
+				}
+			}
+		}
+	}()
+
 	return pool
 }
 
 func (p *Pool) Get(waitTime time.Duration) (interface{}, error) {
-	var pc *PoolConn
 	select {
-	case pc = <-p.freeConns:
-		//good
+	case pc := <-p.freeConns:
+		return pc, nil
+	case dead := <-p.deadConns:
+		{
+			c, err := p.factory()
+			if err != nil {
+				p.deadConns <- dead
+				return nil, err
+			}
+			dead.Conn = c
+			dead.healthy = true
+			return dead, nil
+		}
 	case <-time.After(waitTime):
 		return nil, errors.New("get conn time out")
 	}
-	if pc.lastPutTime.Add(p.maxFreeDuration).Before(time.Now()) {
-		pc.Healthy = false
-	}
-	if !pc.Healthy {
-		var err error
-		pc.Conn, err = p.factory()
-		if err != nil {
-			p.freeConns <- &PoolConn{
-				pool: p,
-			}
-			return nil, err
-		}
-		pc.lastPutTime = time.Now()
-		pc.Healthy = true
-	}
-	return pc, nil
 }
 
-func (p *PoolConn) GiveBack() {
+func (p *PoolConn) Unhealthy() {
+	p.healthy = false
+}
+
+func (p *PoolConn) Return() {
+	if !p.healthy {
+		p.Conn.Close()
+	}
 	p.Lock()
+	defer p.Unlock()
 	if p.Conn == nil {
-		//已返还
 		return
 	}
 	wrap := &PoolConn{
-		Healthy:     p.Healthy,
 		Conn:        p.Conn,
 		pool:        p.pool,
 		lastPutTime: time.Now(),
 	}
-	if !wrap.Healthy {
-		wrap.Conn.Close()
-	}
-
-	select {
-	case wrap.pool.freeConns <- wrap:
-	default:
-		if wrap.Conn != nil {
-			wrap.Conn.Close()
-		}
+	if wrap.healthy {
+		wrap.pool.freeConns <- wrap
+	} else {
+		wrap.pool.deadConns <- wrap
 	}
 	p.Conn = nil
-	p.Unlock()
 }

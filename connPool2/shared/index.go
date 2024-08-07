@@ -9,6 +9,8 @@ import (
 )
 
 // 不用返还，连接不是独占
+// 独占式的连接用lru扩缩容
+// 共享式的连接用qps扩缩容
 
 func NewPool(size int, factory func() (*grpc.ClientConn, error)) *Pool {
 	p := &Pool{
@@ -38,22 +40,21 @@ func NewPool(size int, factory func() (*grpc.ClientConn, error)) *Pool {
 type State int
 
 const (
-	DEAD State = iota
-	CONNECTING
-	HEALTHY
+	DEAD       State = iota
+	CONNECTING       //在建立新连接
+	HEALTHY          // 健康
 )
 
 type PoolConn struct {
-	state State
-	idx   int
-	pool  *Pool
-	conn  *grpc.ClientConn
+	state       State
+	idx         int // 在array中的位置
+	pool        *Pool
+	conn        *grpc.ClientConn
+	activeLease int //缩容时kill
+	//如果每个conn都有少量的qps lease,那就永远缩容不了了  。状态
 }
 
 func (cp *PoolConn) Unhealthy() {
-
-	err := cp.conn.Close()
-
 	cp.pool.Lock()
 	defer cp.pool.Unlock()
 	if cp.state == DEAD {
@@ -64,16 +65,21 @@ func (cp *PoolConn) Unhealthy() {
 		state: DEAD,
 		idx:   cp.idx,
 		pool:  cp.pool,
+		conn:  cp.conn,
 	}
 	cp.pool.conns[cp.idx] = newPc
+}
 
+func (cp *PoolConn) Return() {
 }
 
 type Pool struct {
 	sync.Mutex
-	factory func() (*grpc.ClientConn, error)
-	conns   []*PoolConn
-	pos     int
+	factory          func() (*grpc.ClientConn, error)
+	conns            []*PoolConn
+	pos              int // roundrobin 位置
+	targetQpsPerConn int // 用于连接池的扩缩容
+
 }
 
 // todo 是否全搞成ctx
@@ -108,6 +114,7 @@ func (p *Pool) Get(waitTime time.Duration) (interface{}, error) {
 				c2.state = DEAD
 			}
 		}()
+		c2.conn.Close()
 		c2.conn, err = p.factory()
 		if err != nil {
 			c2.state = DEAD
