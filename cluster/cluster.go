@@ -1,6 +1,8 @@
 package cluster
 
-import "test/connPool2/types"
+import (
+	"sync"
+)
 
 type LbStrategy interface {
 	Choose() *Instance
@@ -10,28 +12,39 @@ type Instance struct {
 	cluster Cluster
 	IP      string
 	Port    int
-	Pool    *types.Pool
-	tags    *map[string]string
+	// Pool    types.Pool
+	Pool interface{}
+	tags map[string]string
 }
 
 type Cluster struct {
+	sync.Mutex
 	name      string
-	instances *[]Instance
-	Lb        LbStrategy
+	instances []*Instance
+	lb        LbStrategy
+}
+
+func (c *Cluster) Choose() *Instance {
+	return c.lb.Choose()
 }
 
 func FindByName(name string) *Cluster {
-
-	// already
-	c := clusters[name]
-	if c != nil {
-		return c
+	value, _ := clusters.LoadOrStore(name, &Cluster{
+		name: name,
+		lb:   &RoundRobin{},
+	})
+	cls := value.(*Cluster)
+	cls.Lock()
+	defer cls.Unlock()
+	if cls.instances != nil {
+		return cls
 	}
-
 	// nacos todo get and listen
 	// warm up conn
-	return nil
 
+	cls.instances = make([]*Instance, 0) //initialized
 }
 
-var clusters map[string]*Cluster = make(map[string]*Cluster)
+var clusters sync.Map
+
+// var clusters map[string]*Cluster = make(map[string]*Cluster)

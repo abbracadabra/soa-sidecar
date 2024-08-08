@@ -3,6 +3,7 @@ package shared
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -12,111 +13,162 @@ import (
 // 独占式的连接用lru扩缩容
 // 共享式的连接用qps扩缩容
 
-func NewPool(size int, factory func() (*grpc.ClientConn, error)) *Pool {
+func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Duration, factory func() (*grpc.ClientConn, func(), error)) *Pool {
+	if size <= 0 {
+		panic("size must be greater than 0")
+	}
+	if maxConcurrentStream <= 0 {
+		panic("maxConcurrentStream must be greater than 0")
+	}
+	if factory == nil {
+		panic("factory must be not nil")
+	}
 	p := &Pool{
-		factory: factory,
-		conns:   make([]*PoolConn, size),
-		locks:   make([]sync.Mutex, size),
+		factory:             factory,
+		conns:               make([]*PoolConn, size),
+		locks:               make([]sync.Mutex, size),
+		maxConcurrentStream: maxConcurrentStream,
 	}
+
 	for i, _ := range p.conns {
-		c, err := factory()
-		if err != nil {
-			p.conns[i] = &PoolConn{
-				state: DEAD,
-				idx:   i,
-				pool:  p,
-			}
-			continue
-		}
 		p.conns[i] = &PoolConn{
-			state: HEALTHY,
-			idx:   i,
-			pool:  p,
-			conn:  c,
+			healthy: false,
+			idx:     i,
+			pool:    p,
 		}
 	}
+	go func() {
+		for i := 0; i < initSize; i++ {
+			func() {
+				p.locks[i].Lock()
+				defer p.locks[i].Unlock()
+				c := p.conns[i]
+				if c.healthy {
+					return
+				}
+				var err error
+				c.Conn, c.closeFunc, err = factory()
+				if err == nil {
+					c.healthy = true
+				}
+			}()
+		}
+	}()
+	go func() {
+		ticker := time.NewTicker(maxIdleTime)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			var close []*grpc.ClientConn
+			func() {
+				p.Lock()
+				defer p.Unlock()
+				for _, c := range p.conns {
+					if c.concurrentStream <= 0 && c.healthy {
+						c.healthy = false
+						close = append(close, c.Conn)
+					}
+				}
+			}()
+			for _, gc := range close {
+				gc.Close()
+			}
+		}
+	}()
 	return p
 }
 
-type State int
-
-const (
-	DEAD    State = iota
-	HEALTHY       // 健康
-)
-
 type PoolConn struct {
-	state            State
+	healthy          bool
 	idx              int // 在array中的位置
 	pool             *Pool
-	conn             *grpc.ClientConn
-	concurrentStream int
+	Conn             *grpc.ClientConn
+	concurrentStream int32
+	closeFunc        func()
 }
 
-func (cp *PoolConn) Unhealthy() {
-	cp.pool.locks[cp.idx].Lock()
-	defer cp.pool.locks[cp.idx].Unlock()
-	if cp.state == DEAD {
+func (pc *PoolConn) Unhealthy() {
+	pc.healthy = false
+}
+
+func (pc *PoolConn) Return() {
+
+	pc.pool.locks[pc.idx].Lock()
+	defer pc.pool.locks[pc.idx].Unlock()
+	if pc.pool.conns[pc.idx] != pc {
+		//done
 		return
 	}
-	cp.conn.Close()
-	cp.state = DEAD
 	newPc := &PoolConn{
-		state: DEAD,
-		idx:   cp.idx,
-		pool:  cp.pool,
-		conn:  cp.conn,
+		healthy: pc.healthy,
+		idx:     pc.idx,
+		pool:    pc.pool,
+		Conn:    pc.Conn,
 	}
-	cp.pool.conns[cp.idx] = newPc
-}
-
-func (cp *PoolConn) Return() {
+	if !newPc.healthy {
+		//cc.Close():直接关闭连接： 这个方法会直接关闭底层的 gRPC 连接，不再接收或发送任何消息。需要注意： 如果有正在进行的 RPC 调用，可能会导致这些调用失败。
+		//如果您希望正在进行的 RPC 调用能够正常结束，再关闭连接，那么 ctx.Cancel() 是一个更好的选择。
+		newPc.closeFunc()
+	}
+	atomic.AddInt32(&pc.concurrentStream, -1)
+	pc.pool.conns[pc.idx] = newPc
 }
 
 type Pool struct {
 	sync.Mutex
-	factory func() (*grpc.ClientConn, error)
-	conns   []*PoolConn
-	pos     int // roundrobin 位置
-	locks   []sync.Mutex
+	factory             func() (*grpc.ClientConn, func(), error)
+	conns               []*PoolConn
+	locks               []sync.Mutex
+	maxConcurrentStream int32
 }
 
 // todo 是否全搞成ctx
 func (p *Pool) Get(waitTime time.Duration) (interface{}, error) {
 
-	//是否选取前者，触发其qps限制，后移位
-	c1, c2 := func() (*PoolConn, *PoolConn) {
+	c1, c2, c3 := func() (*PoolConn, *PoolConn, *PoolConn) {
 		p.Lock()
 		defer p.Unlock()
 		var dead *PoolConn
+		var defaultt *PoolConn
 		for i := 0; i < len(p.conns); i++ {
-			pc := p.conns[(p.pos+i)%len(p.conns)]
-			if pc.state == HEALTHY {
-				return pc, nil
+			pc := p.conns[i]
+			if pc.healthy && pc.concurrentStream < p.maxConcurrentStream {
+				return pc, nil, nil
 			}
-			if pc.state == DEAD {
-				dead = pc
+			if !pc.healthy {
+				if dead == nil {
+					dead = pc
+				}
+			} else {
+				defaultt = pc
 			}
 		}
-		p.pos = (p.pos + 1) % len(p.conns)
-		return nil, dead
+		return nil, dead, defaultt
 	}()
 	if c1 != nil {
+		atomic.AddInt32(&c1.concurrentStream, 1)
 		return c1, nil
 	}
 	if c2 != nil {
 		var err error
 		p.locks[c2.idx].Lock()
 		defer p.locks[c2.idx].Unlock()
-		if c2.state == HEALTHY {
+		if c2.healthy {
+			atomic.AddInt32(&c2.concurrentStream, 1)
 			return c2, nil
 		}
-		c2.conn, err = p.factory()
+		c2.Conn, c2.closeFunc, err = p.factory()
 		if err != nil {
 			return nil, err
 		}
-		c2.state = HEALTHY
+		c2.healthy = true
+		atomic.AddInt32(&c2.concurrentStream, 1)
 		return c2, nil
 	}
-	return nil, errors.New("no conn")
+	if c3 != nil {
+		atomic.AddInt32(&c3.concurrentStream, 1)
+		return c3, nil
+	}
+
+	return nil, errors.New("no conn left")
 }

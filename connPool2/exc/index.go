@@ -22,13 +22,13 @@ type PoolConn struct {
 }
 
 type Pool struct {
-	freeConns       chan *PoolConn
-	deadConns       chan *PoolConn
-	factory         func() (net.Conn, error)
-	maxFreeDuration time.Duration
+	idleConns chan *PoolConn
+	deadConns chan *PoolConn
+	factory   func() (net.Conn, error)
+	// maxIdleTime time.Duration
 }
 
-func NewConnPool(init, maxConns int, maxFreeDuration, waitDuration time.Duration, factory func() (net.Conn, error)) *Pool {
+func NewConnPool(init, maxConns int, maxIdleTime, waitDuration time.Duration, factory func() (net.Conn, error)) *Pool {
 	if maxConns <= 0 {
 		maxConns = 1
 	}
@@ -39,9 +39,10 @@ func NewConnPool(init, maxConns int, maxFreeDuration, waitDuration time.Duration
 		init = maxConns
 	}
 	pool := &Pool{
-		freeConns:       make(chan *PoolConn, maxConns),
-		factory:         factory,
-		maxFreeDuration: maxFreeDuration,
+		idleConns: make(chan *PoolConn, maxConns),
+		deadConns: make(chan *PoolConn, maxConns),
+		factory:   factory,
+		// maxIdleTime: maxIdleTime,
 	}
 
 	go func() {
@@ -52,7 +53,7 @@ func NewConnPool(init, maxConns int, maxFreeDuration, waitDuration time.Duration
 					pool: pool,
 				}
 			} else {
-				pool.freeConns <- &PoolConn{
+				pool.idleConns <- &PoolConn{
 					healthy:     true,
 					Conn:        c,
 					pool:        pool,
@@ -61,27 +62,27 @@ func NewConnPool(init, maxConns int, maxFreeDuration, waitDuration time.Duration
 			}
 		}
 		for i := 0; i < maxConns-init; i++ {
-			pool.freeConns <- &PoolConn{
+			pool.idleConns <- &PoolConn{
 				pool: pool,
 			}
 		}
 	}()
 
 	go func() {
-		ticker := time.NewTicker(pool.maxFreeDuration / 3)
+		ticker := time.NewTicker(maxIdleTime / 3)
 		defer ticker.Stop()
 
 		for range ticker.C {
 		Loop:
 			for {
 				select {
-				case pc := <-pool.freeConns:
-					if time.Since(pc.lastPutTime) > maxFreeDuration {
+				case pc := <-pool.idleConns:
+					if time.Since(pc.lastPutTime) > maxIdleTime {
 						pc.Conn.Close()
 						pc.healthy = false
 						pool.deadConns <- pc
 					} else {
-						pool.freeConns <- pc
+						pool.idleConns <- pc
 					}
 				default:
 					break Loop
@@ -95,7 +96,7 @@ func NewConnPool(init, maxConns int, maxFreeDuration, waitDuration time.Duration
 
 func (p *Pool) Get(waitTime time.Duration) (interface{}, error) {
 	select {
-	case pc := <-p.freeConns:
+	case pc := <-p.idleConns:
 		return pc, nil
 	case dead := <-p.deadConns:
 		{
@@ -117,24 +118,24 @@ func (p *PoolConn) Unhealthy() {
 	p.healthy = false
 }
 
-func (p *PoolConn) Return() {
-	if !p.healthy {
-		p.Conn.Close()
-	}
-	p.Lock()
-	defer p.Unlock()
-	if p.Conn == nil {
+func (pc *PoolConn) Return() {
+	pc.Lock()
+	defer pc.Unlock()
+	if pc.Conn == nil {
 		return
 	}
+	if !pc.healthy {
+		pc.Conn.Close()
+	}
 	wrap := &PoolConn{
-		Conn:        p.Conn,
-		pool:        p.pool,
+		Conn:        pc.Conn,
+		pool:        pc.pool,
 		lastPutTime: time.Now(),
 	}
 	if wrap.healthy {
-		wrap.pool.freeConns <- wrap
+		wrap.pool.idleConns <- wrap
 	} else {
 		wrap.pool.deadConns <- wrap
 	}
-	p.Conn = nil
+	pc.Conn = nil
 }

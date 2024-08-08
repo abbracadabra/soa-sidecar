@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"test/cluster"
+	"test/connPool2/shared"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -55,20 +57,25 @@ func director(ctx context.Context, fullMethodName string) (context.Context, *grp
 	md, _ := metadata.FromIncomingContext(ctx)
 	//复制header，向上游stream发送header
 	outCtx := metadata.NewOutgoingContext(ctx, md.Copy())
-	//md[":authority"]
+	cls := cluster.FindByName(md[":authority"][0]) //集群
+	ins := cls.Choose()                            //实例
+	pp := ins.Pool.(*shared.Pool)
+	c, _ := pp.Get(1) //连接
+	pc := c.(*shared.PoolConn)
+	cc := pc.Conn
 
 	// cc, err := grpc.Dial(target, grpc.WithContextDialer(func(ctx context.Context, target string) (net.Conn, error) {
 	// 	return (&net.Dialer{}).DialContext(ctx, "tcp", target)
 	// }), grpc.WithInsecure())
 	// ctx结束后，grpc-go会断开连接
-	cc, err := grpc.DialContext(ctx, "localhost:50051", grpc.WithCodec(Codec()), grpc.WithInsecure())
+	// cc, err := grpc.DialContext(ctx, "localhost:50051", grpc.WithCodec(Codec()), grpc.WithInsecure())
 
 	// cc, err := grpc.NewClient(gclient.NewClientConfig{
 	// 	Target:      target,
 	// 	Options:     []grpc.DialOption{grpc.WithInsecure()},
 	// 	DialContext: ctx,
 	// })
-	return outCtx, cc, err
+	return outCtx, cc, nil
 }
 
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
