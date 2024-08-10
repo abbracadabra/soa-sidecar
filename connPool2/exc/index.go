@@ -94,7 +94,7 @@ func NewConnPool(init, maxConns int, maxIdleTime, waitDuration time.Duration, fa
 	return pool
 }
 
-func (p *Pool) Get(waitTime time.Duration) (interface{}, error) {
+func (p *Pool) Get(waitTime time.Duration) (*PoolConn, error) {
 	select {
 	case pc := <-p.idleConns:
 		return pc, nil

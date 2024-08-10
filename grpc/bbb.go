@@ -7,12 +7,12 @@ import (
 	"net"
 	"test/cluster"
 	"test/connPool2/shared"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -56,33 +56,21 @@ func main() {
 func director(ctx context.Context, fullMethodName string) (context.Context, *grpc.ClientConn, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	//复制header，向上游stream发送header
-	outCtx := metadata.NewOutgoingContext(ctx, md.Copy())
-	cls := cluster.FindByName(md[":authority"][0]) //集群
-	ins := cls.Choose()                            //实例
-	pp := ins.Pool.(*shared.Pool)
-	c, _ := pp.Get(1) //连接
-	pc := c.(*shared.PoolConn)
-	cc := pc.Conn
+	outCtx := metadata.NewOutgoingContext(ctx, md)
 
-	// cc, err := grpc.Dial(target, grpc.WithContextDialer(func(ctx context.Context, target string) (net.Conn, error) {
-	// 	return (&net.Dialer{}).DialContext(ctx, "tcp", target)
-	// }), grpc.WithInsecure())
-	// ctx结束后，grpc-go会断开连接
-	// cc, err := grpc.DialContext(ctx, "localhost:50051", grpc.WithCodec(Codec()), grpc.WithInsecure())
-
-	// cc, err := grpc.NewClient(gclient.NewClientConfig{
-	// 	Target:      target,
-	// 	Options:     []grpc.DialOption{grpc.WithInsecure()},
-	// 	DialContext: ctx,
-	// })
-	return outCtx, cc, nil
+	cls := cluster.FindByName(md[":authority"][0])          //集群
+	ins := cls.Choose()                                     //实例  todo by 勇道
+	pc, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
+	if err != nil {
+		return nil, nil, err
+	}
+	return outCtx, pc.Conn, nil
 }
 
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
 func handler(srv interface{}, serverStream grpc.ServerStream) error {
 	fmt.Println("start handleinggggg")
 
-	// little bit of gRPC internals never hurt anyone
 	fullMethodName, ok := grpc.MethodFromServerStream(serverStream)
 	if !ok {
 		return status.Errorf(codes.Internal, "lowLevelServerStream not exists in context")
@@ -94,7 +82,6 @@ func handler(srv interface{}, serverStream grpc.ServerStream) error {
 	}
 
 	//defer return back backendConn
-
 	clientCtx, clientCancel := context.WithCancel(outgoingCtx)
 	defer clientCancel()
 	// TODO(mwitkow): Add a `forwarded` header to metadata, https://en.wikipedia.org/wiki/X-Forwarded-For.
@@ -215,58 +202,4 @@ func (l *newSingleConnListener) Close() error {
 
 func (l *newSingleConnListener) Addr() net.Addr {
 	return l.conn.LocalAddr()
-}
-
-func Codec() grpc.Codec {
-	return CodecWithParent(&protoCodec{})
-}
-
-func CodecWithParent(fallback grpc.Codec) grpc.Codec {
-	return &rawCodec{fallback}
-}
-
-type rawCodec struct {
-	parentCodec grpc.Codec
-}
-
-type myMessage struct {
-	payload []byte
-}
-
-func (c *rawCodec) Marshal(v interface{}) ([]byte, error) {
-	out, ok := v.(*myMessage)
-	if !ok {
-		fmt.Println("use default codec")
-		return c.parentCodec.Marshal(v)
-	}
-	fmt.Println("use raw payload")
-	return out.payload, nil
-
-}
-
-func (c *rawCodec) Unmarshal(data []byte, v interface{}) error {
-	dst, ok := v.(*myMessage)
-	if !ok {
-		return c.parentCodec.Unmarshal(data, v)
-	}
-	dst.payload = data
-	return nil
-}
-
-func (c *rawCodec) String() string {
-	return fmt.Sprintf("proxy>%s", c.parentCodec.String())
-}
-
-type protoCodec struct{}
-
-func (protoCodec) Marshal(v interface{}) ([]byte, error) {
-	return proto.Marshal(v.(proto.Message))
-}
-
-func (protoCodec) Unmarshal(data []byte, v interface{}) error {
-	return proto.Unmarshal(data, v.(proto.Message))
-}
-
-func (protoCodec) String() string {
-	return "proto"
 }

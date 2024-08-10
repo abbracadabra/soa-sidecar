@@ -122,8 +122,41 @@ type Pool struct {
 	maxConcurrentStream int32
 }
 
+func (p *Pool) Shutdown() {
+	p.Lock()
+	defer p.Unlock()
+	for _, pc := range p.conns {
+		pc.closeFunc()
+	}
+}
+func (p *Pool) Get(waitTime time.Duration) (*PoolConn, error) {
+	var conn *PoolConn
+	var err error
+
+	retries := 2          // Maximum number of retries
+	delay := waitTime / 2 // Divide waitTime by the number of retries
+
+	for i := 0; i <= retries; i++ {
+		conn, err = p.tryGet()
+		if err == nil {
+			return conn, nil // Success, return the connection
+		}
+
+		// If there's an error and we've used up our retries, break out
+		if i == retries {
+			break
+		}
+
+		// Wait for the specified delay before retrying
+		time.Sleep(delay)
+	}
+
+	// Return the last error encountered after retrying
+	return nil, err
+}
+
 // todo 是否全搞成ctx
-func (p *Pool) Get(waitTime time.Duration) (interface{}, error) {
+func (p *Pool) tryGet() (*PoolConn, error) {
 
 	c1, c2, c3 := func() (*PoolConn, *PoolConn, *PoolConn) {
 		p.Lock()
@@ -132,7 +165,7 @@ func (p *Pool) Get(waitTime time.Duration) (interface{}, error) {
 		var defaultt *PoolConn
 		for i := 0; i < len(p.conns); i++ {
 			pc := p.conns[i]
-			if pc.healthy && pc.concurrentStream < p.maxConcurrentStream {
+			if pc.healthy && pc.concurrentStream <= p.maxConcurrentStream {
 				return pc, nil, nil
 			}
 			if !pc.healthy {
