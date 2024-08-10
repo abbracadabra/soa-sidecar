@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"sync"
+	"test/codec"
 	"test/nameService"
 	"time"
 
@@ -77,8 +78,8 @@ func FindByName(name string) *Cluster {
 func createPool(ins *Instance) interface{} {
 	// todo get service info/config
 	p := shared.NewPool(1, 1, 9999, time.Minute*1, func() (*grpc.ClientConn, func(), error) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cc, err := grpc.DialContext(ctx, ins.IP+":"+strconv.Itoa(ins.Port), grpc.WithCodec(Codec()), grpc.WithInsecure(), grpc.WithKeepaliveParams(keepalive.ClientParameters{
+		ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
+		cc, err := grpc.DialContext(ctx, ins.IP+":"+strconv.Itoa(ins.Port), grpc.WithCodec(codec.Codec()), grpc.WithInsecure(), grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                10 * time.Second,
 			Timeout:             3 * time.Second,
 			PermitWithoutStream: true, // 允许没有活跃流的心跳
@@ -88,9 +89,7 @@ func createPool(ins *Instance) interface{} {
 		}
 
 		return cc, func() {
-			//cc.Close():直接关闭连接： 这个方法会直接关闭底层的 gRPC 连接，不再接收或发送任何消息。需要注意： 如果有正在进行的 RPC 调用，可能会导致这些调用失败。
-			//如果您希望正在进行的 RPC 调用能够正常结束，再关闭连接，那么 ctx.Cancel() 是一个更好的选择。
-			cancel()
+			cc.Close()
 		}, nil
 
 	})

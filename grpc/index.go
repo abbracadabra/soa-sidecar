@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"test/cluster"
-	"test/connPool2/shared"
+	"test/codec"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -25,61 +25,46 @@ func main() {
 	defer ln.Close()
 
 	fmt.Println("Listening on :8012")
+	// server.Serve(ln)
 
-	var server = grpc.NewServer(
-		grpc.UnknownServiceHandler(handler),
-	)
-	fmt.Println("Serve(conn net.Conn) error {")
-	// ,grpc.Creds(creds)   tls server  https://github.com/devsu/grpc-proxy/blob/master/grpc-proxy.go
-	server.Serve(ln)
-	// for {
-	// 	conn, err := ln.Accept()
-	// 	if err != nil {
-	// 		fmt.Println("Error accepting connection:", err)
-	// 		continue
-	// 	}
+	for {
+		conn, err := ln.Accept()
 
-	// 	go Serve(conn)
-	// }
-}
+		if err != nil {
+			fmt.Println("Error accepting connection:", err)
+			continue
+		}
 
-// func Serve(conn net.Conn) error {
-// 	var server = grpc.NewServer(
-// 		grpc.UnknownServiceHandler(handler),
-// 	)
-// 	fmt.Println("Serve(conn net.Conn) error {")
-// 	// ,grpc.Creds(creds)   tls server  https://github.com/devsu/grpc-proxy/blob/master/grpc-proxy.go
-// 	server.Serve(&newSingleConnListener{conn: conn})
-// 	return nil
-// }
-
-func director(ctx context.Context, fullMethodName string) (context.Context, *grpc.ClientConn, error) {
-	md, _ := metadata.FromIncomingContext(ctx)
-	//复制header，向上游stream发送header
-	outCtx := metadata.NewOutgoingContext(ctx, md)
-
-	cls := cluster.FindByName(md[":authority"][0])          //集群
-	ins := cls.Choose()                                     //实例  todo by 勇道
-	pc, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
-	if err != nil {
-		return nil, nil, err
+		go handleConnOutbound(conn)
+		// go Serve(conn)
 	}
-	return outCtx, pc.Conn, nil
 }
+
+// -------------
+func handleConnOutbound(conn net.Conn) {
+	lis := &SingleConnListener{conn: conn}
+	go server.Serve(lis)
+}
+
+var server = grpc.NewServer(
+	// ,grpc.Creds(creds)   tls server  https://github.com/devsu/grpc-proxy/blob/master/grpc-proxy.go
+	grpc.UnknownServiceHandler(handler),
+)
 
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
 func handler(srv interface{}, serverStream grpc.ServerStream) error {
-	fmt.Println("start handleinggggg")
 
 	fullMethodName, ok := grpc.MethodFromServerStream(serverStream)
 	if !ok {
 		return status.Errorf(codes.Internal, "lowLevelServerStream not exists in context")
 	}
 	// We require that the director's returned context inherits from the serverStream.Context().
-	outgoingCtx, backendConn, err := director(serverStream.Context(), fullMethodName)
+	// if conn outbound or inbound todo
+	outgoingCtx, backendConn, err := director(serverStream.Context())
 	if err != nil {
 		return err
 	}
+	// defer return  pc todo
 
 	//defer return back backendConn
 	clientCtx, clientCancel := context.WithCancel(outgoingCtx)
@@ -129,6 +114,26 @@ func handler(srv interface{}, serverStream grpc.ServerStream) error {
 		}
 	}
 	return status.Errorf(codes.Internal, "gRPC proxying should never reach this stage.")
+}
+
+func director(ctx context.Context) (context.Context, *grpc.ClientConn, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	//复制header，向上游stream发送header
+	outCtx := metadata.NewOutgoingContext(ctx, md)
+
+	cc, err := grpc.DialContext(ctx, "127.0.0.1:50051", grpc.WithCodec(codec.Codec()), grpc.WithInsecure(), grpc.WithKeepaliveParams(keepalive.ClientParameters{
+		Time:                10 * time.Second,
+		Timeout:             10 * time.Second,
+		PermitWithoutStream: true, // 允许没有活跃流的心跳
+	}))
+	return outCtx, cc, err
+	// cls := cluster.FindByName(md[":authority"][0])          //集群
+	// ins := cls.Choose()                                     //实例  todo by 勇道
+	// pc, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
+	// if err != nil {
+	// 	return nil, nil, err
+	// }
+	// return outCtx, pc, nil
 }
 
 func forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan error {
