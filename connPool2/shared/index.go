@@ -12,7 +12,7 @@ import (
 // 不用返还，连接不是独占
 // 独占式的连接用lru扩缩容
 // 共享式的连接用qps扩缩容
-
+// factory:返回连接、关闭方法、错误
 func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Duration, factory func() (*grpc.ClientConn, func(), error)) *Pool {
 	if size <= 0 {
 		panic("size must be greater than 0")
@@ -106,8 +106,6 @@ func (pc *PoolConn) Return() {
 		Conn:    pc.Conn,
 	}
 	if !newPc.healthy {
-		//cc.Close():直接关闭连接： 这个方法会直接关闭底层的 gRPC 连接，不再接收或发送任何消息。需要注意： 如果有正在进行的 RPC 调用，可能会导致这些调用失败。
-		//如果您希望正在进行的 RPC 调用能够正常结束，再关闭连接，那么 ctx.Cancel() 是一个更好的选择。
 		newPc.closeFunc()
 	}
 	atomic.AddInt32(&pc.concurrentStream, -1)

@@ -41,6 +41,10 @@ func (c *Cluster) Choose() *Instance {
 	return c.lb.Choose()
 }
 
+func (c *Cluster) update(latest []*Instance) {
+
+}
+
 func FindByName(name string) *Cluster {
 	value, _ := clusters.LoadOrStore(name, &Cluster{
 		name:      name,
@@ -70,6 +74,7 @@ func FindByName(name string) *Cluster {
 			newIns.Pool = createPool(&newIns)
 			unchanged = append(unchanged, &newIns)
 		}
+		cls.instances = unchanged //
 	})
 	cls.initialized = true
 	return cls
