@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -70,10 +71,10 @@ var server = grpc.NewServer(
 )
 
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
-func handler(srv interface{}, serverStream grpc.ServerStream, outbound bool) error {
+func handler(srv interface{}, downStream grpc.ServerStream, outbound bool) error {
 
-	downCtx := serverStream.Context()
-	fullMethodName, ok := grpc.MethodFromServerStream(serverStream)
+	downCtx := downStream.Context()
+	fullMethodName, ok := grpc.MethodFromServerStream(downStream)
 	if !ok {
 		return status.Errorf(codes.Internal, "lowLevelServerStream not exists in context")
 	}
@@ -93,8 +94,8 @@ func handler(srv interface{}, serverStream grpc.ServerStream, outbound bool) err
 	upCtx, upCancel := context.WithCancel(upCtx)
 	defer upCancel()
 	// TODO(mwitkow): Add a `forwarded` header to metadata, https://en.wikipedia.org/wiki/X-Forwarded-For.
-	// ctx可以操控让clientStream关闭，这里ctx的parent是serverStream的ctx，serverStream完了clientStream也完，ctx不影响conn
-	clientStream, err := grpc.NewClientStream(upCtx, &grpc.StreamDesc{
+	// ctx可以操控让upstream关闭，这里ctx的parent是serverStream的ctx，serverStream完了upstream也完，ctx不影响conn
+	upstream, err := grpc.NewClientStream(upCtx, &grpc.StreamDesc{
 		ServerStreams: true,
 		ClientStreams: true,
 	}, backendConn, fullMethodName)
@@ -105,8 +106,8 @@ func handler(srv interface{}, serverStream grpc.ServerStream, outbound bool) err
 	// Explicitly *do not close* s2cErrChan and c2sErrChan, otherwise the select below will not terminate.
 	// Channels do not have to be closed, it is just a control flow mechanism, see
 	// https://groups.google.com/forum/#!msg/golang-nuts/pZwdYRGxCIk/qpbHxRRPJdUJ
-	s2cErrChan := forwardServerToClient(serverStream, clientStream)
-	c2sErrChan := forwardClientToServer(clientStream, serverStream)
+	s2cErrChan := forwardServerToClient(downStream, upstream)
+	c2sErrChan := forwardClientToServer(upstream, downStream)
 	// We don't know which side is going to stop sending first, so we need a select between the two.
 	for i := 0; i < 2; i++ {
 		select {
@@ -114,12 +115,12 @@ func handler(srv interface{}, serverStream grpc.ServerStream, outbound bool) err
 			if s2cErr == io.EOF {
 				// this is the happy case where the sender has encountered io.EOF, and won't be sending anymore./
 				// the clientStream>serverStream may continue pumping though.
-				clientStream.CloseSend()
+				upstream.CloseSend()
 			} else {
 				// however, we may have gotten a receive error (stream disconnected, a read error etc) in which case we need
 				// to cancel the clientStream to the backend, let all of its goroutines be freed up by the CancelFunc and
 				// exit with an error to the stack
-				clientCancel()
+				upCancel()
 				return status.Errorf(codes.Internal, "failed proxying s2c: %v", s2cErr)
 			}
 		case c2sErr := <-c2sErrChan:
@@ -128,7 +129,7 @@ func handler(srv interface{}, serverStream grpc.ServerStream, outbound bool) err
 			// will be nil.
 			//trailer最后才能获取到
 			//发送trailer
-			serverStream.SetTrailer(clientStream.Trailer())
+			downStream.SetTrailer(upstream.Trailer())
 			if c2sErr == io.EOF {
 				return nil
 			}
@@ -155,8 +156,11 @@ func director(downCtx context.Context, md metadata.MD, outbound bool) (*grpc.Cli
 	// inbound流量，authority lookup bind upstream
 	inboundCluster.GetServingByName(md[":authority"][0])
 
-	cls := cluster.FindByName(md[":authority"][0])          //集群
-	ins := cls.Choose()                                     //实例  todo by 勇道
+	cls := cluster.FindByName(md[":authority"][0], outbound) //集群
+	ins := cls.Choose()                                      //实例  todo by 勇道
+	if ins == nil {
+		return nil, errors.New("no instance")
+	}
 	pc, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
 	if err != nil {
 		return nil, err

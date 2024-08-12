@@ -15,7 +15,8 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
-var clusters sync.Map
+var outboundClusters sync.Map
+var inboundClusters sync.Map
 
 type LbStrategy interface {
 	Choose() *Instance
@@ -41,43 +42,67 @@ func (c *Cluster) Choose() *Instance {
 	return c.lb.Choose()
 }
 
-func (c *Cluster) update(latest []*Instance) {
-
+func (c *Cluster) addInstance(ip string, port int, tags map[string]string) {
+	c.Lock()
+	defer c.Unlock()
+	ins := Instance{
+		cluster: c,
+		IP:      ip,
+		Port:    port,
+		tags:    tags,
+	}
+	ins.Pool = createPool(&ins)
+	c.instances = append(c.instances, &ins)
 }
 
-func FindByName(name string) *Cluster {
-	value, _ := clusters.LoadOrStore(name, &Cluster{
-		name:      name,
-		lb:        &RoundRobin{},
-		instances: make([]*Instance, 0),
-	})
-	cls := value.(*Cluster)
-	cls.Lock()
-	defer cls.Unlock()
-	if cls.initialized {
-		return cls
+func (c *Cluster) Update(services []model.SubscribeService) {
+	c.Lock()
+	defer c.Unlock()
+	unchanged, added, removed := diff(c.instances, services)
+	//grpc strategy ??
+	for _, del := range removed {
+		del.Pool.(*shared.Pool).Shutdown()
 	}
-	nameService.Subscribe(name, func(services []model.SubscribeService, err error) {
+	for _, add := range added {
+		newIns := Instance{
+			cluster: c,
+			IP:      add.Ip,
+			Port:    int(add.Port),
+			tags:    add.Metadata,
+		}
+		newIns.Pool = createPool(&newIns)
+		unchanged = append(unchanged, &newIns)
+	}
+	c.instances = unchanged
+}
 
-		unchanged, added, removed := diff(cls.instances, services)
-		//grpc strategy ??
-		for _, del := range removed {
-			del.Pool.(*shared.Pool).Shutdown()
+func FindByName(name string, outbound bool) *Cluster {
+	if outbound {
+		value, _ := outboundClusters.LoadOrStore(name, &Cluster{
+			name:      name,
+			lb:        &RoundRobin{},
+			instances: make([]*Instance, 0),
+		})
+		cls := value.(*Cluster)
+		cls.Lock()
+		defer cls.Unlock()
+		if cls.initialized {
+			return cls
 		}
-		for _, add := range added {
-			newIns := Instance{
-				cluster: cls,
-				IP:      add.Ip,
-				Port:    int(add.Port),
-				tags:    add.Metadata,
-			}
-			newIns.Pool = createPool(&newIns)
-			unchanged = append(unchanged, &newIns)
-		}
-		cls.instances = unchanged //
-	})
-	cls.initialized = true
-	return cls
+		nameService.Subscribe(name, func(services []model.SubscribeService, err error) {
+			cls.Update(services)
+		})
+		cls.initialized = true
+		return cls
+	} else {
+		value, _ := inboundClusters.LoadOrStore(name, &Cluster{
+			name:        name,
+			lb:          &RoundRobin{},
+			instances:   make([]*Instance, 0),
+			initialized: true,
+		})
+		return value.(*Cluster)
+	}
 }
 
 func createPool(ins *Instance) interface{} {

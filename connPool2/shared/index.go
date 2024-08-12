@@ -78,7 +78,21 @@ func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Dur
 	return p
 }
 
+type Lease struct {
+	healthy bool
+	conn    *PoolConn
+}
+
+func (l *Lease) Unhealthy() {
+	l.healthy = false
+}
+
+func (l *Lease) Return() {
+	l.conn.onReturn(l.healthy)
+}
+
 type PoolConn struct {
+	sync.Mutex
 	healthy          bool
 	idx              int // 在array中的位置
 	pool             *Pool
@@ -87,30 +101,38 @@ type PoolConn struct {
 	closeFunc        func()
 }
 
-func (pc *PoolConn) Unhealthy() {
-	pc.healthy = false
+func (pc *PoolConn) onReturn(healthy bool) {
+	defer atomic.AddInt32(&pc.concurrentStream, -1)
+	pc.healthy = healthy
+	if !healthy {
+		pc.closeFunc()
+	}
 }
 
-func (pc *PoolConn) Return() {
+// func (pc *PoolConn) Unhealthy() {
+// 	pc.healthy = false
+// }
 
-	pc.pool.locks[pc.idx].Lock()
-	defer pc.pool.locks[pc.idx].Unlock()
-	if pc.pool.conns[pc.idx] != pc {
-		//done
-		return
-	}
-	newPc := &PoolConn{
-		healthy: pc.healthy,
-		idx:     pc.idx,
-		pool:    pc.pool,
-		Conn:    pc.Conn,
-	}
-	if !newPc.healthy {
-		newPc.closeFunc()
-	}
-	atomic.AddInt32(&pc.concurrentStream, -1)
-	pc.pool.conns[pc.idx] = newPc
-}
+// func (pc *PoolConn) Return() {
+
+// 	pc.pool.locks[pc.idx].Lock()
+// 	defer pc.pool.locks[pc.idx].Unlock()
+// 	// if pc.pool.conns[pc.idx] != pc {
+// 	// 	//done
+// 	// 	return
+// 	// }
+// 	// newPc := &PoolConn{
+// 	// 	healthy: pc.healthy,
+// 	// 	idx:     pc.idx,
+// 	// 	pool:    pc.pool,
+// 	// 	Conn:    pc.Conn,
+// 	// }
+// 	if !pc.healthy {
+// 		pc.closeFunc()
+// 	}
+// 	atomic.AddInt32(&pc.concurrentStream, -1)
+// 	// pc.pool.conns[pc.idx] = newPc
+// }
 
 type Pool struct {
 	sync.Mutex
@@ -127,7 +149,7 @@ func (p *Pool) Shutdown() {
 		pc.closeFunc()
 	}
 }
-func (p *Pool) Get(waitTime time.Duration) (*PoolConn, error) {
+func (p *Pool) Get(waitTime time.Duration) (*Lease, error) {
 	var conn *PoolConn
 	var err error
 
