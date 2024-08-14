@@ -3,21 +3,27 @@ package grpcc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"test/cluster"
+	"test/codec"
 	"test/connPool2/shared"
 	"time"
 
+	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-/*
-grpc还有一种方式：
+func ServeConnListener(ln net.Listener) {
+	defer ln.Close()
+
 	h2Server := &http2.Server{}
 
 	grpcServer := grpc.NewServer(
@@ -25,23 +31,44 @@ grpc还有一种方式：
 			return handler(srv, serverStream, true)
 		}),
 	)
-	h2Server.ServeConn(nil, &http2.ServeConnOpts{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.ProtoMajor == 2 && r.Header.Get("content-type") == "application/grpc" {
-				grpcServer.ServeHTTP(w, r)
-			}
-		}),
-	})
-*/
+	defer grpcServer.GracefulStop()
 
-func ServeConnListener(ln net.Listener) {
-	var server = grpc.NewServer(
-		// ,grpc.Creds(creds)   tls server  https://github.com/devsu/grpc-proxy/blob/master/grpc-proxy.go
+	grpcServer2 := grpc.NewServer(
 		grpc.UnknownServiceHandler(func(srv interface{}, serverStream grpc.ServerStream) error {
-			return handler(srv, serverStream, true)
+			return handler(srv, serverStream, false)
 		}),
 	)
-	server.Serve(ln)
+	defer grpcServer2.GracefulStop()
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			fmt.Println("Error accepting connection:", err)
+			continue
+		}
+		// listen port边界/ip边界; port边界较好，因为可能机器只有本地loopback
+		localAddr := conn.LocalAddr()
+		tcpAddr, ok := localAddr.(*net.TCPAddr)
+		if !ok {
+			conn.Close()
+		}
+		ip := tcpAddr.IP.String()
+		port := tcpAddr.Port
+		outbound := isOutbound(ip, port)
+		if outbound {
+			go h2Server.ServeConn(conn, &http2.ServeConnOpts{
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					grpcServer.ServeHTTP(w, r)
+				}),
+			})
+		} else {
+			go h2Server.ServeConn(conn, &http2.ServeConnOpts{
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					grpcServer2.ServeHTTP(w, r)
+				}),
+			})
+		}
+	}
 }
 
 // func main() {
@@ -54,6 +81,13 @@ func ServeConnListener(ln net.Listener) {
 
 // 	fmt.Println("Listening on :8012")
 // 	// server.Serve(ln)
+
+// server := grpc.NewServer(
+//	// ,grpc.Creds(creds)   tls server  https://github.com/devsu/grpc-proxy/blob/master/grpc-proxy.go
+// 	grpc.UnknownServiceHandler(func(srv interface{}, serverStream grpc.ServerStream) error {
+// 		return handler(srv, serverStream, true)
+// 	}),
+// )
 
 // 	for {
 // 		conn, err := ln.Accept()
@@ -77,10 +111,7 @@ func ServeConnListener(ln net.Listener) {
 // 			lis := &SingleConnListener{conn: conn}
 // 			go server.Serve(lis)
 // 		} else {
-
 // 		}
-// 		// go handleConnOutbound(conn, outbound)
-// 		// go Serve(conn)
 // 	}
 // }
 
@@ -102,12 +133,17 @@ func handler(srv interface{}, downstream grpc.ServerStream, outbound bool) error
 	md, _ := metadata.FromIncomingContext(downCtx) // header,是个copy
 	// outCtx := metadata.NewOutgoingContext(serverStream.Context(), md)
 
-	// if conn outbound or inbound todo
 	connLease, err := director(downCtx, md, outbound)
 	if err != nil {
 		return err
 	}
 	defer connLease.Return()
+
+	cc, err := grpc.DialContext(context.Background(), "127.0.0.1:8111", grpc.WithCodec(codec.Codec()), grpc.WithInsecure(), grpc.WithKeepaliveParams(keepalive.ClientParameters{
+		Time:                10 * time.Second,
+		Timeout:             10 * time.Second,
+		PermitWithoutStream: true, // 允许没有活跃流的心跳
+	}))
 
 	upCtx := metadata.NewOutgoingContext(downCtx, md) // 转发header
 	upCtx, upCancel := context.WithCancel(upCtx)
