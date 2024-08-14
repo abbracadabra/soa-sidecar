@@ -8,7 +8,6 @@ import (
 	"net"
 	"test/cluster"
 	"test/connPool2/shared"
-	"test/inboundCluster"
 	"time"
 
 	"google.golang.org/grpc"
@@ -18,6 +17,19 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+/*
+grpc还有一种方式：
+h2Server := &http2.Server{}
+
+	grpcServer := grpc.NewServer()
+	h2Server.ServeConn(nil, &http2.ServeConnOpts{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.ProtoMajor == 2 && r.Header.Get("content-type") == "application/grpc" {
+				grpcServer.ServeHTTP(w, r)
+			}
+		}),
+	})
+*/
 func main() {
 	ln, err := net.Listen("tcp", ":8012")
 	if err != nil {
@@ -71,10 +83,10 @@ var server = grpc.NewServer(
 )
 
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
-func handler(srv interface{}, downStream grpc.ServerStream, outbound bool) error {
+func handler(srv interface{}, downstream grpc.ServerStream, outbound bool) error {
 
-	downCtx := downStream.Context()
-	fullMethodName, ok := grpc.MethodFromServerStream(downStream)
+	downCtx := downstream.Context()
+	fullMethodName, ok := grpc.MethodFromServerStream(downstream)
 	if !ok {
 		return status.Errorf(codes.Internal, "lowLevelServerStream not exists in context")
 	}
@@ -84,11 +96,11 @@ func handler(srv interface{}, downStream grpc.ServerStream, outbound bool) error
 	// outCtx := metadata.NewOutgoingContext(serverStream.Context(), md)
 
 	// if conn outbound or inbound todo
-	backendConn, err := director(downCtx, md, outbound)
+	connLease, err := director(downCtx, md, outbound)
 	if err != nil {
 		return err
 	}
-	// defer return  pc todo
+	defer connLease.Return()
 
 	upCtx := metadata.NewOutgoingContext(downCtx, md) // 转发header
 	upCtx, upCancel := context.WithCancel(upCtx)
@@ -98,16 +110,15 @@ func handler(srv interface{}, downStream grpc.ServerStream, outbound bool) error
 	upstream, err := grpc.NewClientStream(upCtx, &grpc.StreamDesc{
 		ServerStreams: true,
 		ClientStreams: true,
-	}, backendConn, fullMethodName)
+	}, connLease.GetConn(), fullMethodName) // 本身不产生网络传输
 	if err != nil {
-		// backendConn.Close()
 		return err
 	}
 	// Explicitly *do not close* s2cErrChan and c2sErrChan, otherwise the select below will not terminate.
 	// Channels do not have to be closed, it is just a control flow mechanism, see
 	// https://groups.google.com/forum/#!msg/golang-nuts/pZwdYRGxCIk/qpbHxRRPJdUJ
-	s2cErrChan := forwardServerToClient(downStream, upstream)
-	c2sErrChan := forwardClientToServer(upstream, downStream)
+	s2cErrChan := forwardServerToClient(downstream, upstream)
+	c2sErrChan := forwardClientToServer(upstream, downstream)
 	// We don't know which side is going to stop sending first, so we need a select between the two.
 	for i := 0; i < 2; i++ {
 		select {
@@ -120,6 +131,7 @@ func handler(srv interface{}, downStream grpc.ServerStream, outbound bool) error
 				// however, we may have gotten a receive error (stream disconnected, a read error etc) in which case we need
 				// to cancel the clientStream to the backend, let all of its goroutines be freed up by the CancelFunc and
 				// exit with an error to the stack
+				connLease.Unhealthy() // todo err区分upstream disconn or downstream disconn,upstream disconn才Unhealthy
 				upCancel()
 				return status.Errorf(codes.Internal, "failed proxying s2c: %v", s2cErr)
 			}
@@ -129,7 +141,7 @@ func handler(srv interface{}, downStream grpc.ServerStream, outbound bool) error
 			// will be nil.
 			//trailer最后才能获取到
 			//发送trailer
-			downStream.SetTrailer(upstream.Trailer())
+			downstream.SetTrailer(upstream.Trailer())
 			if c2sErr == io.EOF {
 				return nil
 			}
@@ -140,7 +152,7 @@ func handler(srv interface{}, downStream grpc.ServerStream, outbound bool) error
 	return status.Errorf(codes.Internal, "gRPC proxying should never reach this stage.")
 }
 
-func director(downCtx context.Context, md metadata.MD, outbound bool) (*grpc.ClientConn, error) {
+func director(downCtx context.Context, md metadata.MD, outbound bool) (*shared.Lease, error) {
 	// md, _ := metadata.FromIncomingContext(ctx)
 	//复制header，向上游stream发送header
 	// outCtx := metadata.NewOutgoingContext(ctx, md)
@@ -153,19 +165,16 @@ func director(downCtx context.Context, md metadata.MD, outbound bool) (*grpc.Cli
 	// }))
 	// return cc, err
 
-	// inbound流量，authority lookup bind upstream
-	inboundCluster.GetServingByName(md[":authority"][0])
-
 	cls := cluster.FindByName(md[":authority"][0], outbound) //集群
 	ins := cls.Choose()                                      //实例  todo by 勇道
 	if ins == nil {
 		return nil, errors.New("no instance")
 	}
-	pc, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
+	lease, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
 	if err != nil {
 		return nil, err
 	}
-	return pc, nil
+	return lease, nil
 }
 
 func forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan error {

@@ -1,4 +1,4 @@
-package main
+package ttls
 
 import (
 	"crypto/rand"

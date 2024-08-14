@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -28,6 +27,7 @@ func getCertificateForSNI(clientHello *tls.ClientHelloInfo) (*tls.Certificate, e
 }
 
 func main() {
+
 	ln, err := net.Listen("tcp", ":8110")
 	if err != nil {
 		fmt.Println("Error setting up TCP listener:", err)
@@ -35,8 +35,10 @@ func main() {
 	}
 	defer ln.Close()
 	log.Println("Starting HTTPS server on :8110")
+	// h2 := http2.Server{}
+	// h2.ServeConn(conn,&ServeConnOpts{Handler:grpcHandler})
 
-	//tls,这里可以tls.serve conn并返回conn
+	//tls,这里可以tls.serve conn并直接返回conn
 	tlsListener := tls.NewListener(ln, &tls.Config{
 		GetCertificate: getCertificateForSNI,
 		MinVersion:     tls.VersionTLS12,
@@ -68,56 +70,21 @@ var client = &http.Client{
 	Transport: tr,
 }
 
-var finished = errors.New("finished")
-
 func handleInbound(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("start servingggg  serv")
+	defer r.Body.Close()
 
-	var fwc = make(chan error, 1)
-	var bwc = make(chan []any, 1)
-	defer func() {
-		select {
-		case e := <-fwc:
-			defer r.Body.Close()
-			if errors.Is(e, finished) {
-				return
-			}
-			len, _ := strconv.Atoi(r.Header.Get("Content-Length"))
-			if len > 0 || r.Header.Get("Content-Encoding") == "chunked" {
-				_, _ = io.Copy(io.Discard, r.Body)
-			}
-			http.Error(w, e.Error(), http.StatusInternalServerError)
-		}
-		select {
-		case e := <-bwc:
-			if e == nil {
-				return
-			}
-			rsp := e[0].(*http.Response)
-			err := e[1].(error)
-			defer rsp.Body.Close()
-			if errors.Is(err, finished) {
-				return
-			}
-			if rsp.Body != nil {
-				_, _ = io.Copy(io.Discard, rsp.Body)
-			}
-		}
-	}()
-
-	defer close(fwc)
-	defer close(bwc)
 	host := r.Header.Get("Host")
 	cls := cluster.FindByName(host, true) //集群
 	ins := cls.Choose()                   //实例  todo by 勇道
 	if ins == nil {
-		fwc <- errors.New("no instance")
+		http.Error(w, "no instance", http.StatusInternalServerError)
 		return
 	}
 
 	req, err := http.NewRequest(r.Method, getFullURL(r, ins.IP+":"+strconv.Itoa(ins.Port)), r.Body)
 	if err != nil {
-		fwc <- err
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	for key, values := range r.Header {
@@ -126,18 +93,27 @@ func handleInbound(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	//开始转发流量，downstream upstream侧任何一方错误，那么两侧连接或stream不能用，无需再读取完Body，proxy两侧处理好超时即可
+	var success bool
+	defer func() {
+		if !success {
+			fmt.Println("转发异常")
+		}
+	}()
 	resp, err := forwardReq(req, client)
+	defer func() {
+		if resp.Body != nil {
+			resp.Body.Close()
+		}
+	}()
 	if err != nil {
-		fwc <- err
 		return
 	}
-	fwc <- finished
 	err = forwardResp(resp, w)
 	if err != nil {
-		bwc <- []any{resp, err}
 		return
 	}
-	bwc <- []any{resp, finished}
+	success = true
 }
 
 func forwardReq(r *http.Request, client *http.Client) (*http.Response, error) {

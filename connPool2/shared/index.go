@@ -24,9 +24,9 @@ func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Dur
 		panic("factory must be not nil")
 	}
 	p := &Pool{
-		factory:             factory,
-		conns:               make([]*PoolConn, size),
-		locks:               make([]sync.Mutex, size),
+		factory: factory,
+		conns:   make([]*PoolConn, size),
+		// locks:               make([]sync.Mutex, size),
 		maxConcurrentStream: maxConcurrentStream,
 	}
 
@@ -40,17 +40,24 @@ func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Dur
 	go func() {
 		for i := 0; i < initSize; i++ {
 			func() {
-				p.locks[i].Lock()
-				defer p.locks[i].Unlock()
 				c := p.conns[i]
+				c.Lock()
+				defer c.Unlock()
 				if c.healthy {
 					return
 				}
-				var err error
-				c.Conn, c.closeFunc, err = factory()
-				if err == nil {
-					c.healthy = true
+				newConn, closeFunc, err := factory()
+				if err != nil {
+					return
 				}
+				newPc := &PoolConn{
+					healthy:   true,
+					idx:       c.idx,
+					pool:      c.pool,
+					Conn:      newConn,
+					closeFunc: closeFunc,
+				}
+				p.conns[i] = newPc
 			}()
 		}
 	}()
@@ -83,12 +90,16 @@ type Lease struct {
 	conn    *PoolConn
 }
 
+func (l *Lease) GetConn() *grpc.ClientConn {
+	return l.conn.Conn
+}
+
 func (l *Lease) Unhealthy() {
 	l.healthy = false
 }
 
 func (l *Lease) Return() {
-	l.conn.onReturn(l.healthy)
+	l.conn.onLeaseReturn(l.healthy)
 }
 
 type PoolConn struct {
@@ -99,9 +110,19 @@ type PoolConn struct {
 	Conn             *grpc.ClientConn
 	concurrentStream int32
 	closeFunc        func()
+	// leaseBeginCb     func() // ??
+	// leaseEndCb       func() // ??
 }
 
-func (pc *PoolConn) onReturn(healthy bool) {
+func (pc *PoolConn) acquireLease() *Lease {
+	atomic.AddInt32(&pc.concurrentStream, 1)
+	l := &Lease{conn: pc, healthy: true}
+	// pc.leaseBeginCb()
+	return l
+}
+
+func (pc *PoolConn) onLeaseReturn(healthy bool) {
+	// defer pc.leaseEndCb()
 	defer atomic.AddInt32(&pc.concurrentStream, -1)
 	pc.healthy = healthy
 	if !healthy {
@@ -109,36 +130,11 @@ func (pc *PoolConn) onReturn(healthy bool) {
 	}
 }
 
-// func (pc *PoolConn) Unhealthy() {
-// 	pc.healthy = false
-// }
-
-// func (pc *PoolConn) Return() {
-
-// 	pc.pool.locks[pc.idx].Lock()
-// 	defer pc.pool.locks[pc.idx].Unlock()
-// 	// if pc.pool.conns[pc.idx] != pc {
-// 	// 	//done
-// 	// 	return
-// 	// }
-// 	// newPc := &PoolConn{
-// 	// 	healthy: pc.healthy,
-// 	// 	idx:     pc.idx,
-// 	// 	pool:    pc.pool,
-// 	// 	Conn:    pc.Conn,
-// 	// }
-// 	if !pc.healthy {
-// 		pc.closeFunc()
-// 	}
-// 	atomic.AddInt32(&pc.concurrentStream, -1)
-// 	// pc.pool.conns[pc.idx] = newPc
-// }
-
 type Pool struct {
 	sync.Mutex
-	factory             func() (*grpc.ClientConn, func(), error)
-	conns               []*PoolConn
-	locks               []sync.Mutex
+	factory func() (*grpc.ClientConn, func(), error)
+	conns   []*PoolConn
+	// locks               []sync.Mutex
 	maxConcurrentStream int32
 }
 
@@ -150,7 +146,7 @@ func (p *Pool) Shutdown() {
 	}
 }
 func (p *Pool) Get(waitTime time.Duration) (*Lease, error) {
-	var conn *PoolConn
+	var conn *Lease
 	var err error
 
 	retries := 2          // Maximum number of retries
@@ -176,8 +172,7 @@ func (p *Pool) Get(waitTime time.Duration) (*Lease, error) {
 }
 
 // todo 是否全搞成ctx
-func (p *Pool) tryGet() (*PoolConn, error) {
-
+func (p *Pool) tryGet() (*Lease, error) {
 	c1, c2, c3 := func() (*PoolConn, *PoolConn, *PoolConn) {
 		p.Lock()
 		defer p.Unlock()
@@ -199,28 +194,30 @@ func (p *Pool) tryGet() (*PoolConn, error) {
 		return nil, dead, defaultt
 	}()
 	if c1 != nil {
-		atomic.AddInt32(&c1.concurrentStream, 1)
-		return c1, nil
+		return c1.acquireLease(), nil
 	}
 	if c2 != nil {
-		var err error
-		p.locks[c2.idx].Lock()
-		defer p.locks[c2.idx].Unlock()
+		c2.Lock()
+		defer c2.Unlock()
 		if c2.healthy {
-			atomic.AddInt32(&c2.concurrentStream, 1)
-			return c2, nil
+			return c2.acquireLease(), nil
 		}
-		c2.Conn, c2.closeFunc, err = p.factory()
+		newConn, closeFunc, err := p.factory()
 		if err != nil {
 			return nil, err
 		}
-		c2.healthy = true
-		atomic.AddInt32(&c2.concurrentStream, 1)
-		return c2, nil
+		newC2 := &PoolConn{
+			healthy:   true,
+			idx:       c2.idx,
+			pool:      c2.pool,
+			Conn:      newConn,
+			closeFunc: closeFunc,
+		}
+		p.conns[c2.idx] = newC2
+		return newC2.acquireLease(), nil
 	}
 	if c3 != nil {
-		atomic.AddInt32(&c3.concurrentStream, 1)
-		return c3, nil
+		return c3.acquireLease(), nil
 	}
 
 	return nil, errors.New("no conn left")
