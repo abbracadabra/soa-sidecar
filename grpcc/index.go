@@ -1,9 +1,8 @@
-package main
+package grpcc
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"test/cluster"
@@ -19,9 +18,13 @@ import (
 
 /*
 grpc还有一种方式：
-h2Server := &http2.Server{}
+	h2Server := &http2.Server{}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnknownServiceHandler(func(srv interface{}, serverStream grpc.ServerStream) error {
+			return handler(srv, serverStream, true)
+		}),
+	)
 	h2Server.ServeConn(nil, &http2.ServeConnOpts{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.ProtoMajor == 2 && r.Header.Get("content-type") == "application/grpc" {
@@ -30,57 +33,61 @@ h2Server := &http2.Server{}
 		}),
 	})
 */
-func main() {
-	ln, err := net.Listen("tcp", ":8012")
-	if err != nil {
-		fmt.Println("Error setting up TCP listener:", err)
-		return
-	}
-	defer ln.Close()
 
-	fmt.Println("Listening on :8012")
-	// server.Serve(ln)
-
-	for {
-		conn, err := ln.Accept()
-
-		if err != nil {
-			fmt.Println("Error accepting connection:", err)
-			continue
-		}
-
-		// listen port边界/ip边界;
-		localAddr := conn.LocalAddr()
-		tcpAddr, ok := localAddr.(*net.TCPAddr)
-		if !ok {
-			conn.Close()
-		}
-		ip := tcpAddr.IP.String()
-		port := tcpAddr.Port
-		outbound := isOutbound(ip, port)
-
-		if outbound {
-			lis := &SingleConnListener{conn: conn}
-			go server.Serve(lis)
-		} else {
-
-		}
-		// go handleConnOutbound(conn, outbound)
-		// go Serve(conn)
-	}
+func ServeConnListener(ln net.Listener) {
+	var server = grpc.NewServer(
+		// ,grpc.Creds(creds)   tls server  https://github.com/devsu/grpc-proxy/blob/master/grpc-proxy.go
+		grpc.UnknownServiceHandler(func(srv interface{}, serverStream grpc.ServerStream) error {
+			return handler(srv, serverStream, true)
+		}),
+	)
+	server.Serve(ln)
 }
+
+// func main() {
+// 	ln, err := net.Listen("tcp", ":8012")
+// 	if err != nil {
+// 		fmt.Println("Error setting up TCP listener:", err)
+// 		return
+// 	}
+// 	defer ln.Close()
+
+// 	fmt.Println("Listening on :8012")
+// 	// server.Serve(ln)
+
+// 	for {
+// 		conn, err := ln.Accept()
+
+// 		if err != nil {
+// 			fmt.Println("Error accepting connection:", err)
+// 			continue
+// 		}
+
+// 		// listen port边界/ip边界;
+// 		localAddr := conn.LocalAddr()
+// 		tcpAddr, ok := localAddr.(*net.TCPAddr)
+// 		if !ok {
+// 			conn.Close()
+// 		}
+// 		ip := tcpAddr.IP.String()
+// 		port := tcpAddr.Port
+// 		outbound := isOutbound(ip, port)
+
+// 		if outbound {
+// 			lis := &SingleConnListener{conn: conn}
+// 			go server.Serve(lis)
+// 		} else {
+
+// 		}
+// 		// go handleConnOutbound(conn, outbound)
+// 		// go Serve(conn)
+// 	}
+// }
 
 func isOutbound(ip string, port int) bool {
 	//判断ip边界 或 port边界
 	return true
 }
-
-var server = grpc.NewServer(
-	// ,grpc.Creds(creds)   tls server  https://github.com/devsu/grpc-proxy/blob/master/grpc-proxy.go
-	grpc.UnknownServiceHandler(func(srv interface{}, serverStream grpc.ServerStream) error {
-		return handler(srv, serverStream, true)
-	}),
-)
 
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
 func handler(srv interface{}, downstream grpc.ServerStream, outbound bool) error {

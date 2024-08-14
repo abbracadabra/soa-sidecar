@@ -1,7 +1,6 @@
-package main
+package httpp
 
 import (
-	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -15,35 +14,34 @@ import (
 	"golang.org/x/net/http2"
 )
 
-func getCertificateForSNI(clientHello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	fmt.Println("start servingggg cert xokk " + clientHello.ServerName)
-	domain := clientHello.ServerName
-	cert, err := GetCert(domain)
-	if err != nil {
-		return nil, err
-	}
-	fmt.Println("start servingggg cert okk")
-	return cert, nil
-}
+// func getCertificateForSNI(clientHello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+// 	fmt.Println("start servingggg cert xokk " + clientHello.ServerName)
+// 	domain := clientHello.ServerName
+// 	cert, err := GetCert(domain)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	fmt.Println("start servingggg cert okk")
+// 	return cert, nil
+// }
 
-func main() {
+func ServeConnListener(ln net.Listener) {
 
-	ln, err := net.Listen("tcp", ":8110")
-	if err != nil {
-		fmt.Println("Error setting up TCP listener:", err)
-		return
-	}
-	defer ln.Close()
-	log.Println("Starting HTTPS server on :8110")
-	// h2 := http2.Server{}
-	// h2.ServeConn(conn,&ServeConnOpts{Handler:grpcHandler})
+	// ln, err := net.Listen("tcp", ":8110")
+	// if err != nil {
+	// 	fmt.Println("Error setting up TCP listener:", err)
+	// 	return
+	// }
+	// defer ln.Close()
+	// log.Println("Starting HTTPS server on :8110")
 
 	//tls,这里可以tls.serve conn并直接返回conn
-	tlsListener := tls.NewListener(ln, &tls.Config{
-		GetCertificate: getCertificateForSNI,
-		MinVersion:     tls.VersionTLS12,
-	})
+	// tlsListener := tls.NewListener(ln, &tls.Config{
+	// 	GetCertificate: getCertificateForSNI,
+	// 	MinVersion:     tls.VersionTLS12,
+	// })
 	//http1
+	var err error
 	server := &http.Server{
 		Handler: http.HandlerFunc(handleInbound),
 	}
@@ -53,7 +51,7 @@ func main() {
 		log.Fatalf("Failed to configure HTTP/2 server: %v", err)
 	}
 
-	err = server.Serve(tlsListener)
+	err = server.Serve(ln)
 	if err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}

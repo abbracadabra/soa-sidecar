@@ -4,11 +4,14 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"strconv"
+	"test/grpcc"
+	"test/httpp"
 )
 
-func start() {
+func startTls(protocol string, port int) {
 
-	ln, err := net.Listen("tcp", ":8110")
+	ln, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
 		fmt.Println("Error setting up TCP listener:", err)
 		return
@@ -16,18 +19,32 @@ func start() {
 	defer ln.Close()
 
 	tlsListener := tls.NewListener(ln, &tls.Config{
-		GetCertificate: getCertificateForSNI,
+		GetCertificate: GetCertificateForSNI,
 		MinVersion:     tls.VersionTLS12,
 	})
+
+	defer tlsListener.Close()
+
+	if protocol == "http" {
+		httpp.ServeConnListener(tlsListener) // 因为grpc的tls alpn是http2，这里还不能知道是不是grpc
+	}
+	if protocol == "grpc" {
+		grpcc.ServeConnListener(tlsListener)
+	}
 }
 
-func getCertificateForSNI(clientHello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	fmt.Println("start servingggg cert xokk " + clientHello.ServerName)
-	domain := clientHello.ServerName
-	cert, err := GetCert(domain)
+func startPlain(protocol string, port int) {
+	ln, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
-		return nil, err
+		fmt.Println("Error setting up TCP listener:", err)
+		return
 	}
-	fmt.Println("start servingggg cert okk")
-	return cert, nil
+	defer ln.Close()
+
+	if protocol == "http" {
+		httpp.ServeConnListener(ln) // 因为grpc的tls alpn是http2，这里还不能知道是不是grpc
+	}
+	if protocol == "grpc" {
+		grpcc.ServeConnListener(ln)
+	}
 }
