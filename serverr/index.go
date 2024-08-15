@@ -18,7 +18,6 @@ func main() {
 var transPrxRule = make(map[string][]any)
 
 func startTransparent() error {
-	//get origin dst
 	ln, err := net.Listen("tcp", ":9999")
 	if err != nil {
 		fmt.Println("Error setting up TCP listener:", err)
@@ -31,20 +30,20 @@ func startTransparent() error {
 		if err != nil {
 			continue
 		}
-		var originPort int //todo
-		spec := transPrxRule[strconv.Itoa(originPort)]
+		var originLocalPort int //todo  get origin dst
+		spec := transPrxRule[strconv.Itoa(originLocalPort)]
 
 		secure := spec[0].(bool)
 		protocol := spec[1].(string)
 
-		// chan <- conn
+		route(conn, secure, protocol)
 	}
 }
 
 func startServe(secure bool, protocol string, port int, bind bool) error {
 
 	if !bind {
-		transPrxRule[strconv.Itoa(port)] = [2]any{secure, protocol}
+		transPrxRule[strconv.Itoa(port)] = []any{secure, protocol}
 		return nil
 	}
 
@@ -55,29 +54,51 @@ func startServe(secure bool, protocol string, port int, bind bool) error {
 	}
 	defer ln.Close()
 
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			continue
+		}
+		route(conn, secure, protocol)
+	}
+
+}
+
+func route(conn net.Conn, secure bool, protocol string) error {
+
 	if secure {
 		// Most uses of this package need not call Handshake explicitly: the first Conn.Read or Conn.Write will call it automatically.
-		ln = tls.NewListener(ln, &tls.Config{
+		conn = tls.Server(conn, &tls.Config{
 			GetCertificate: ttls.GetCertificateForSNI,
 			MinVersion:     tls.VersionTLS12,
 		})
+		// ln = tls.NewListener(ln)
 
-		defer ln.Close()
+		// defer ln.Close()
 	}
 
 	if protocol == "http" {
-		httpp.ServeConnListener(ln)
+		httpp.Channel <- conn
+		// httpp.ServeConnListener(ln)
 		return nil
 	}
 	if protocol == "grpc" {
-		grpcc.ServeConnListener(ln)
+		grpcc.Channel <- conn
+		// grpcc.ServeConnListener(ln)
 		return nil
 	}
 
 	if secure {
-		ttls.ServeConnListener(ln)
+		ttls.Channel <- conn
+		// ttls.ServeConnListener(ln)
 		return nil
 	}
 
 	return errors.New("unknown protocol")
+}
+
+func StartProtocols() {
+	go httpp.ServeConnListener()
+	go grpcc.ServeConnListener()
+	go ttls.ServeConnListener()
 }

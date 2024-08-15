@@ -3,7 +3,6 @@ package grpcc
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -19,37 +18,40 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-func ServeConnListener(ln net.Listener) {
-	defer ln.Close()
+var Channel = make(chan net.Conn)
 
-	// listen port边界/ip边界; port边界较好，因为可能机器只有本地loopback
-	localAddr := ln.Addr().(*net.TCPAddr)
-	ip := localAddr.IP.String()
-	port := localAddr.Port
+func ServeConnListener() {
 
-	mh := myHandler{
-		outbound: isOutbound(ip, port),
+	var mh1 = myHandler{
+		outbound: false,
 	}
-
-	grpcServer := grpc.NewServer(
-		grpc.UnknownServiceHandler(mh.handler),
+	var grpcServerIn = grpc.NewServer(
+		grpc.UnknownServiceHandler(mh1.handler),
 	)
 
-	defer grpcServer.GracefulStop()
+	defer grpcServerIn.GracefulStop()
+
+	var mh2 = myHandler{
+		outbound: true,
+	}
+	var grpcServerOut = grpc.NewServer(
+		grpc.UnknownServiceHandler(mh2.handler),
+	)
+
+	defer grpcServerOut.GracefulStop()
 
 	h2Server := &http2.Server{}
 
 	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			fmt.Println("Error accepting connection:", err)
-			continue
+		select {
+		case conn := <-Channel:
+			go h2Server.ServeConn(conn, &http2.ServeConnOpts{
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					// if else todo
+					grpcServerOut.ServeHTTP(w, r)
+				}),
+			})
 		}
-		go h2Server.ServeConn(conn, &http2.ServeConnOpts{
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				grpcServer.ServeHTTP(w, r)
-			}),
-		})
 
 	}
 }
@@ -273,3 +275,14 @@ func (l *newSingleConnListener) Close() error {
 func (l *newSingleConnListener) Addr() net.Addr {
 	return l.conn.LocalAddr()
 }
+
+// conn, err := ln.Accept()
+// if err != nil {
+// 	fmt.Println("Error accepting connection:", err)
+// 	continue
+// }
+// go h2Server.ServeConn(conn, &http2.ServeConnOpts{
+// 	Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// 		grpcServer.ServeHTTP(w, r)
+// 	}),
+// })

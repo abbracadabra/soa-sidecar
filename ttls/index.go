@@ -5,24 +5,25 @@ import (
 	"net"
 )
 
-func ServeConnListener(ln net.Listener) {
+var Channel = make(chan net.Conn)
+
+func ServeConnListener() {
 	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			continue
-		}
-		tlsConn := conn.(*tls.Conn)
-		err = tlsConn.Handshake()
-		if err != nil {
-			continue
-		}
+		select {
+		case conn := <-Channel:
+			tlsConn := conn.(*tls.Conn)
+			err := tlsConn.Handshake()
+			if err != nil {
+				continue
+			}
 
-		state := tlsConn.ConnectionState()
+			state := tlsConn.ConnectionState()
 
-		handleConn := myHandler{
-			ConnectionState: state,
+			handleConn := myHandler{
+				ConnectionState: state,
+			}
+			go handleConn.handleConn(conn)
 		}
-		go handleConn.handleConn(conn)
 	}
 }
 
@@ -33,3 +34,22 @@ type myHandler struct {
 func (mh *myHandler) handleConn(conn net.Conn) {
 
 }
+
+// for {
+// 	conn, err := ln.Accept()
+// 	if err != nil {
+// 		continue
+// 	}
+// 	tlsConn := conn.(*tls.Conn)
+// 	err = tlsConn.Handshake()
+// 	if err != nil {
+// 		continue
+// 	}
+
+// 	state := tlsConn.ConnectionState()
+
+// 	handleConn := myHandler{
+// 		ConnectionState: state,
+// 	}
+// 	go handleConn.handleConn(conn)
+// }

@@ -9,37 +9,18 @@ import (
 	"net/url"
 	"strconv"
 	"test/cluster"
+	"test/helper"
 	"time"
 
 	"golang.org/x/net/http2"
 )
 
-// func getCertificateForSNI(clientHello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-// 	fmt.Println("start servingggg cert xokk " + clientHello.ServerName)
-// 	domain := clientHello.ServerName
-// 	cert, err := GetCert(domain)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	fmt.Println("start servingggg cert okk")
-// 	return cert, nil
-// }
+var Channel = make(chan net.Conn)
 
-func ServeConnListener(ln net.Listener) {
+func ServeConnListener() {
 
-	// ln, err := net.Listen("tcp", ":8110")
-	// if err != nil {
-	// 	fmt.Println("Error setting up TCP listener:", err)
-	// 	return
-	// }
-	// defer ln.Close()
-	// log.Println("Starting HTTPS server on :8110")
+	var ln net.Listener = helper.NewChanListener(Channel)
 
-	//tls,这里可以tls.serve conn并直接返回conn
-	// tlsListener := tls.NewListener(ln, &tls.Config{
-	// 	GetCertificate: getCertificateForSNI,
-	// 	MinVersion:     tls.VersionTLS12,
-	// })
 	//http1
 	var err error
 	server := &http.Server{

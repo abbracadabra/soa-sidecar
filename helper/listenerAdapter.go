@@ -1,4 +1,4 @@
-package grpcc
+package helper
 
 import (
 	"net"
@@ -17,12 +17,9 @@ func (l *SingleConnListener) Accept() (net.Conn, error) {
 	l.acceptMux.Lock()
 	defer l.acceptMux.Unlock()
 	if l.accepted {
-		return nil, &net.OpError{
-			Op:   "accept",
-			Net:  "tcp",
-			Addr: l.conn.LocalAddr(),
-			Err:  net.ErrClosed,
-		}
+		ch := make(chan struct{})
+		<-ch //无限等待
+		// return nil, net.ErrClosed
 	}
 	l.accepted = true
 	return l.conn, nil
