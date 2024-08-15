@@ -8,14 +8,12 @@ import (
 	"net"
 	"net/http"
 	"test/cluster"
-	"test/codec"
 	"test/connPool2/shared"
 	"time"
 
 	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -24,21 +22,22 @@ import (
 func ServeConnListener(ln net.Listener) {
 	defer ln.Close()
 
-	h2Server := &http2.Server{}
+	// listen port边界/ip边界; port边界较好，因为可能机器只有本地loopback
+	localAddr := ln.Addr().(*net.TCPAddr)
+	ip := localAddr.IP.String()
+	port := localAddr.Port
+
+	mh := myHandler{
+		outbound: isOutbound(ip, port),
+	}
 
 	grpcServer := grpc.NewServer(
-		grpc.UnknownServiceHandler(func(srv interface{}, serverStream grpc.ServerStream) error {
-			return handler(srv, serverStream, true)
-		}),
+		grpc.UnknownServiceHandler(mh.handler),
 	)
+
 	defer grpcServer.GracefulStop()
 
-	grpcServer2 := grpc.NewServer(
-		grpc.UnknownServiceHandler(func(srv interface{}, serverStream grpc.ServerStream) error {
-			return handler(srv, serverStream, false)
-		}),
-	)
-	defer grpcServer2.GracefulStop()
+	h2Server := &http2.Server{}
 
 	for {
 		conn, err := ln.Accept()
@@ -46,28 +45,12 @@ func ServeConnListener(ln net.Listener) {
 			fmt.Println("Error accepting connection:", err)
 			continue
 		}
-		// listen port边界/ip边界; port边界较好，因为可能机器只有本地loopback
-		localAddr := conn.LocalAddr()
-		tcpAddr, ok := localAddr.(*net.TCPAddr)
-		if !ok {
-			conn.Close()
-		}
-		ip := tcpAddr.IP.String()
-		port := tcpAddr.Port
-		outbound := isOutbound(ip, port)
-		if outbound {
-			go h2Server.ServeConn(conn, &http2.ServeConnOpts{
-				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					grpcServer.ServeHTTP(w, r)
-				}),
-			})
-		} else {
-			go h2Server.ServeConn(conn, &http2.ServeConnOpts{
-				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					grpcServer2.ServeHTTP(w, r)
-				}),
-			})
-		}
+		go h2Server.ServeConn(conn, &http2.ServeConnOpts{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				grpcServer.ServeHTTP(w, r)
+			}),
+		})
+
 	}
 }
 
@@ -120,8 +103,12 @@ func isOutbound(ip string, port int) bool {
 	return true
 }
 
+type myHandler struct {
+	outbound bool
+}
+
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
-func handler(srv interface{}, downstream grpc.ServerStream, outbound bool) error {
+func (mh *myHandler) handler(srv interface{}, downstream grpc.ServerStream) error {
 
 	downCtx := downstream.Context()
 	fullMethodName, ok := grpc.MethodFromServerStream(downstream)
@@ -133,17 +120,11 @@ func handler(srv interface{}, downstream grpc.ServerStream, outbound bool) error
 	md, _ := metadata.FromIncomingContext(downCtx) // header,是个copy
 	// outCtx := metadata.NewOutgoingContext(serverStream.Context(), md)
 
-	connLease, err := director(downCtx, md, outbound)
+	connLease, err := director(downCtx, md, mh.outbound)
 	if err != nil {
 		return err
 	}
 	defer connLease.Return()
-
-	cc, err := grpc.DialContext(context.Background(), "127.0.0.1:8111", grpc.WithCodec(codec.Codec()), grpc.WithInsecure(), grpc.WithKeepaliveParams(keepalive.ClientParameters{
-		Time:                10 * time.Second,
-		Timeout:             10 * time.Second,
-		PermitWithoutStream: true, // 允许没有活跃流的心跳
-	}))
 
 	upCtx := metadata.NewOutgoingContext(downCtx, md) // 转发header
 	upCtx, upCancel := context.WithCancel(upCtx)
@@ -196,6 +177,17 @@ func handler(srv interface{}, downstream grpc.ServerStream, outbound bool) error
 }
 
 func director(downCtx context.Context, md metadata.MD, outbound bool) (*shared.Lease, error) {
+	cls := cluster.FindByName(md[":authority"][0], outbound) //集群
+	ins := cls.Choose()                                      //实例  todo by 勇道
+	if ins == nil {
+		return nil, errors.New("no instance")
+	}
+	lease, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
+	if err != nil {
+		return nil, err
+	}
+	return lease, nil
+
 	// md, _ := metadata.FromIncomingContext(ctx)
 	//复制header，向上游stream发送header
 	// outCtx := metadata.NewOutgoingContext(ctx, md)
@@ -207,17 +199,6 @@ func director(downCtx context.Context, md metadata.MD, outbound bool) (*shared.L
 	// 	PermitWithoutStream: true, // 允许没有活跃流的心跳
 	// }))
 	// return cc, err
-
-	cls := cluster.FindByName(md[":authority"][0], outbound) //集群
-	ins := cls.Choose()                                      //实例  todo by 勇道
-	if ins == nil {
-		return nil, errors.New("no instance")
-	}
-	lease, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
-	if err != nil {
-		return nil, err
-	}
-	return lease, nil
 }
 
 func forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan error {
