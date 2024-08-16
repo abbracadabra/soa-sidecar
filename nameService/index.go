@@ -35,6 +35,10 @@ func Subscribe(name string, cb func(services []model.SubscribeService, err error
 	fmt.Println(subscribeErr.Error())
 }
 
+func Register(name string, ip string, port int) {
+
+}
+
 func createClient() naming_client.INamingClient {
 	// 创建clientConfig
 	var clientConfig = constant.ClientConfig{

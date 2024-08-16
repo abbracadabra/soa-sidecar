@@ -22,6 +22,7 @@ var Channel = make(chan net.Conn)
 
 func ServeConnListener() {
 
+	//只要是入到proxy专门为内部开的端口，则是inner，否则为outer
 	var mh1 = myHandler{
 		outbound: false,
 	}

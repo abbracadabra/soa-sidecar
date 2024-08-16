@@ -16,6 +16,7 @@ import (
 )
 
 var outboundClusters sync.Map
+
 var inboundClusters sync.Map
 
 type LbStrategy interface {
@@ -42,7 +43,7 @@ func (c *Cluster) Choose() *Instance {
 	return c.lb.Choose()
 }
 
-func (c *Cluster) addInstance(ip string, port int, tags map[string]string) {
+func (c *Cluster) Add(ip string, port int, tags map[string]string) {
 	c.Lock()
 	defer c.Unlock()
 	ins := Instance{
@@ -76,6 +77,7 @@ func (c *Cluster) Update(services []model.SubscribeService) {
 	c.instances = unchanged
 }
 
+// 何为inbound，port是上报服务的
 func FindByName(name string, outbound bool) *Cluster {
 	if outbound {
 		value, _ := outboundClusters.LoadOrStore(name, &Cluster{

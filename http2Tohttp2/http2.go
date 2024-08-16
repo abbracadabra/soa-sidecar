@@ -42,7 +42,6 @@ func handleConnection(conn net.Conn) {
 	})
 
 }
-
 func handleServerInbound(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
