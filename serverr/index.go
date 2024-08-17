@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"sync"
 	"test/grpcc"
 	"test/httpp"
 	"test/ttls"
@@ -17,9 +16,8 @@ func main() {
 }
 
 var servRule = make(map[string][]any)
-var initOne sync.Once
 
-func doStartServe(transparent bool, port int, outbound bool) error {
+func StartTransparent(port int, outbound bool) error {
 	ln, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
 		fmt.Println("Error setting up TCP listener:", err)
@@ -32,57 +30,35 @@ func doStartServe(transparent bool, port int, outbound bool) error {
 		if err != nil {
 			continue
 		}
-		//todo  get origin dst
-		dstPort := port
-		if transparent {
-			dstPort = 0
-		}
-
+		dstPort := 0
 		spec := servRule[strconv.Itoa(dstPort)]
 		secure := spec[0].(bool)
 		protocol := spec[1].(string)
-
 		route(conn, secure, protocol)
 	}
 }
 
-func StartServe(port int, transparent bool, outbound bool, secure bool, protocol string) error {
-
+func AddTransRule(port int, secure bool, protocol string) {
 	servRule[strconv.Itoa(port)] = []any{secure, protocol}
+}
 
-	initOne.Do(func() {
-		go httpp.ServeConnListener()
-		go grpcc.ServeConnListener()
-		go ttls.ServeConnListener()
-	})
+func ServeProtocol(port int, outbound bool, secure bool, protocol string) error {
 
-	doStartServe(transparent, port, outbound)
-	return nil
+	ln, err := net.Listen("tcp", ":"+strconv.Itoa(port))
+	if err != nil {
+		fmt.Println("Error setting up TCP listener:", err)
+		return nil
+	}
+	defer ln.Close()
 
-	// if !bind {
-	// 	startTransOnce.Do(func() {
-	// 		go startTransparentUniversal(9999, true)
-	// 		go startTransparentUniversal(9998, false)
-	// 	})
-	// 	return nil
-	// }
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			continue
+		}
 
-	// ln, err := net.Listen("tcp", ":"+strconv.Itoa(port))
-	// if err != nil {
-	// 	fmt.Println("Error setting up TCP listener:", err)
-	// 	return nil
-	// }
-	// defer ln.Close()
-
-	// for {
-	// 	conn, err := ln.Accept()
-	// 	if err != nil {
-	// 		continue
-	// 	}
-	// 	//add
-	// 	route(conn, secure, protocol)
-	// }
-
+		route(conn, secure, protocol)
+	}
 }
 
 func route(conn net.Conn, secure bool, protocol string) error {

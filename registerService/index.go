@@ -10,11 +10,12 @@ import (
 	"strconv"
 	"test/cluster"
 	"test/nameService"
+	"test/serverr"
 )
 
 func export(src string, proxyPort int, pushRegistry bool) {
 
-	cluster.FindByName()
+	// cluster.FindByName()
 
 }
 
@@ -54,8 +55,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Error accepting connection: %s", err)
 			continue
 		}
-
-		go handleConnection(conn)
+		serverr.Route()
 	}
 
 	//看看nacos的register怎么搞的

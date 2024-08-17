@@ -23,21 +23,21 @@ var Channel = make(chan net.Conn)
 func ServeConnListener() {
 
 	//只要是入到proxy专门为内部开的端口，则是inner，否则为outer
-	var mh1 = myHandler{
-		outbound: false,
+	var outhandler = myHandler{
+		director: outboundDirector,
+	}
+	var grpcServerOut = grpc.NewServer(
+		grpc.UnknownServiceHandler(outhandler.handler),
+	)
+
+	var inhandler = myHandler{
+		director: inboundDirector,
 	}
 	var grpcServerIn = grpc.NewServer(
-		grpc.UnknownServiceHandler(mh1.handler),
+		grpc.UnknownServiceHandler(inhandler.handler),
 	)
 
 	defer grpcServerIn.GracefulStop()
-
-	var mh2 = myHandler{
-		outbound: true,
-	}
-	var grpcServerOut = grpc.NewServer(
-		grpc.UnknownServiceHandler(mh2.handler),
-	)
 
 	defer grpcServerOut.GracefulStop()
 
@@ -57,57 +57,17 @@ func ServeConnListener() {
 	}
 }
 
-// func main() {
-// 	ln, err := net.Listen("tcp", ":8012")
-// 	if err != nil {
-// 		fmt.Println("Error setting up TCP listener:", err)
-// 		return
-// 	}
-// 	defer ln.Close()
-
-// 	fmt.Println("Listening on :8012")
-// 	// server.Serve(ln)
-
-// server := grpc.NewServer(
-//	// ,grpc.Creds(creds)   tls server  https://github.com/devsu/grpc-proxy/blob/master/grpc-proxy.go
-// 	grpc.UnknownServiceHandler(func(srv interface{}, serverStream grpc.ServerStream) error {
-// 		return handler(srv, serverStream, true)
-// 	}),
-// )
-
-// 	for {
-// 		conn, err := ln.Accept()
-
-// 		if err != nil {
-// 			fmt.Println("Error accepting connection:", err)
-// 			continue
-// 		}
-
-// 		// listen port边界/ip边界;
-// 		localAddr := conn.LocalAddr()
-// 		tcpAddr, ok := localAddr.(*net.TCPAddr)
-// 		if !ok {
-// 			conn.Close()
-// 		}
-// 		ip := tcpAddr.IP.String()
-// 		port := tcpAddr.Port
-// 		outbound := isOutbound(ip, port)
-
-// 		if outbound {
-// 			lis := &SingleConnListener{conn: conn}
-// 			go server.Serve(lis)
-// 		} else {
-// 		}
-// 	}
-// }
-
 func isOutbound(ip string, port int) bool {
 	//判断ip边界 或 port边界
 	return true
 }
 
-type myHandler struct {
+type myinHandler struct {
 	outbound bool
+}
+
+type myHandler struct {
+	director func(context.Context, metadata.MD) (*shared.Lease, error)
 }
 
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
@@ -123,7 +83,7 @@ func (mh *myHandler) handler(srv interface{}, downstream grpc.ServerStream) erro
 	md, _ := metadata.FromIncomingContext(downCtx) // header,是个copy
 	// outCtx := metadata.NewOutgoingContext(serverStream.Context(), md)
 
-	connLease, err := director(downCtx, md, mh.outbound)
+	connLease, err := mh.director(downCtx, md)
 	if err != nil {
 		return err
 	}
@@ -132,7 +92,6 @@ func (mh *myHandler) handler(srv interface{}, downstream grpc.ServerStream) erro
 	upCtx := metadata.NewOutgoingContext(downCtx, md) // 转发header
 	upCtx, upCancel := context.WithCancel(upCtx)
 	defer upCancel()
-	// TODO(mwitkow): Add a `forwarded` header to metadata, https://en.wikipedia.org/wiki/X-Forwarded-For.
 	// ctx可以操控让upstream关闭，这里ctx的parent是serverStream的ctx，serverStream完了upstream也完，ctx不影响conn
 	upstream, err := grpc.NewClientStream(upCtx, &grpc.StreamDesc{
 		ServerStreams: true,
@@ -179,7 +138,7 @@ func (mh *myHandler) handler(srv interface{}, downstream grpc.ServerStream) erro
 	return status.Errorf(codes.Internal, "gRPC proxying should never reach this stage.")
 }
 
-func director(downCtx context.Context, md metadata.MD, outbound bool) (*shared.Lease, error) {
+func outboundDirector(downCtx context.Context, md metadata.MD) (*shared.Lease, error) {
 	cls := cluster.FindByName(md[":authority"][0], outbound) //集群
 	ins := cls.Choose()                                      //实例  todo by 勇道
 	if ins == nil {
@@ -190,18 +149,19 @@ func director(downCtx context.Context, md metadata.MD, outbound bool) (*shared.L
 		return nil, err
 	}
 	return lease, nil
+}
 
-	// md, _ := metadata.FromIncomingContext(ctx)
-	//复制header，向上游stream发送header
-	// outCtx := metadata.NewOutgoingContext(ctx, md)
-
-	// connectCtx, _ := context.WithTimeout(downCtx, time.Second*2)
-	// cc, err := grpc.DialContext(connectCtx, "127.0.0.1:50051", grpc.WithCodec(codec.Codec()), grpc.WithInsecure(), grpc.WithKeepaliveParams(keepalive.ClientParameters{
-	// 	Time:                10 * time.Second,
-	// 	Timeout:             10 * time.Second,
-	// 	PermitWithoutStream: true, // 允许没有活跃流的心跳
-	// }))
-	// return cc, err
+func inboundDirector(downCtx context.Context, md metadata.MD) (*shared.Lease, error) {
+	cls := cluster.FindByName(md[":authority"][0], outbound) //集群
+	ins := cls.Choose()                                      //实例  todo by 勇道
+	if ins == nil {
+		return nil, errors.New("no instance")
+	}
+	lease, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
+	if err != nil {
+		return nil, err
+	}
+	return lease, nil
 }
 
 func forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan error {
