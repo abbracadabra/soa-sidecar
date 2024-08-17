@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"test/cluster"
 	"test/connPool2/shared"
+	"test/localInstance"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -62,11 +63,8 @@ func isOutbound(ip string, port int) bool {
 	return true
 }
 
-type myinHandler struct {
-	outbound bool
-}
-
 type myHandler struct {
+	dstPort  int
 	director func(context.Context, metadata.MD) (*shared.Lease, error)
 }
 
@@ -139,8 +137,8 @@ func (mh *myHandler) handler(srv interface{}, downstream grpc.ServerStream) erro
 }
 
 func outboundDirector(downCtx context.Context, md metadata.MD) (*shared.Lease, error) {
-	cls := cluster.FindByName(md[":authority"][0], outbound) //集群
-	ins := cls.Choose()                                      //实例  todo by 勇道
+	cls := cluster.FindByName(md[":authority"][0]) //集群
+	ins := cls.Choose()                            //实例  todo by 勇道
 	if ins == nil {
 		return nil, errors.New("no instance")
 	}
@@ -152,8 +150,9 @@ func outboundDirector(downCtx context.Context, md metadata.MD) (*shared.Lease, e
 }
 
 func inboundDirector(downCtx context.Context, md metadata.MD) (*shared.Lease, error) {
-	cls := cluster.FindByName(md[":authority"][0], outbound) //集群
-	ins := cls.Choose()                                      //实例  todo by 勇道
+	// cls := cluster.FindByName(md[":authority"][0], outbound) //集群
+	// ins := cls.Choose() //实例  todo by 勇道
+	ins := localInstance.FindByPort()
 	if ins == nil {
 		return nil, errors.New("no instance")
 	}

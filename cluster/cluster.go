@@ -78,33 +78,33 @@ func (c *Cluster) Update(services []model.SubscribeService) {
 }
 
 // 何为inbound，port是上报服务的
-func FindByName(name string, outbound bool) *Cluster {
-	if outbound {
-		value, _ := outboundClusters.LoadOrStore(name, &Cluster{
-			name:      name,
-			lb:        &RoundRobin{},
-			instances: make([]*Instance, 0),
-		})
-		cls := value.(*Cluster)
-		cls.Lock()
-		defer cls.Unlock()
-		if cls.initialized {
-			return cls
-		}
-		nameService.Subscribe(name, func(services []model.SubscribeService, err error) {
-			cls.Update(services)
-		})
-		cls.initialized = true
+func FindByName(name string) *Cluster {
+	// if outbound {
+	value, _ := outboundClusters.LoadOrStore(name, &Cluster{
+		name:      name,
+		lb:        &RoundRobin{},
+		instances: make([]*Instance, 0),
+	})
+	cls := value.(*Cluster)
+	cls.Lock()
+	defer cls.Unlock()
+	if cls.initialized {
 		return cls
-	} else {
-		value, _ := inboundClusters.LoadOrStore(name, &Cluster{
-			name:        name,
-			lb:          &RoundRobin{},
-			instances:   make([]*Instance, 0),
-			initialized: true,
-		})
-		return value.(*Cluster)
 	}
+	nameService.Subscribe(name, func(services []model.SubscribeService, err error) {
+		cls.Update(services)
+	})
+	cls.initialized = true
+	return cls
+	// } else {
+	// 	value, _ := inboundClusters.LoadOrStore(name, &Cluster{
+	// 		name:        name,
+	// 		lb:          &RoundRobin{},
+	// 		instances:   make([]*Instance, 0),
+	// 		initialized: true,
+	// 	})
+	// 	return value.(*Cluster)
+	// }
 }
 
 func createPool(ins *Instance) interface{} {
