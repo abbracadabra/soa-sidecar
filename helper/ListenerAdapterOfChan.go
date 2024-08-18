@@ -2,15 +2,15 @@ package helper
 
 import (
 	"net"
-	"sync"
+	"strconv"
 )
 
 // NewChanListener 创建并返回一个 ChanListener 实例
-func NewChanListener(connChan chan net.Conn) *ChanListener {
+func NewChanListener(ip string, port int) *ChanListener {
 	return &ChanListener{
-		connChan: connChan,
+		connChan: make(chan net.Conn),
 		// close:    make(chan struct{}),
-		addr: &mockAddr{},
+		addr: &mockAddr{network: "tcp", address: ip + ":" + strconv.Itoa(port)},
 	}
 }
 
@@ -19,7 +19,11 @@ type ChanListener struct {
 	connChan chan net.Conn
 	// close    chan struct{}
 	addr net.Addr
-	once sync.Once
+	// once sync.Once
+}
+
+func (l *ChanListener) Supply(conn net.Conn) {
+	l.connChan <- conn
 }
 
 // Accept 实现了 net.Listener 接口，从 chan net.Conn 获取下一个连接
@@ -34,9 +38,9 @@ func (l *ChanListener) Accept() (net.Conn, error) {
 
 // Close 关闭 Listener
 func (l *ChanListener) Close() error {
-	l.once.Do(func() {
-		close(l.close)
-	})
+	// l.once.Do(func() {
+	// 	close(l.close)
+	// })
 	return nil
 }
 

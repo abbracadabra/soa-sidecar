@@ -5,13 +5,11 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/http"
 	"test/cluster"
 	"test/connPool2/shared"
 	"test/localInstance"
 	"time"
 
-	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -19,57 +17,73 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-var Channel = make(chan net.Conn)
+func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalInstance) {
 
-func ServeConnListener() {
-
-	//只要是入到proxy专门为内部开的端口，则是inner，否则为outer
-	var outhandler = myHandler{
-		director: outboundDirector,
+	defer ln.Close()
+	var handler = myHandler{
+		cycle: &inboundCycle{ins: ins},
 	}
-	var grpcServerOut = grpc.NewServer(
-		grpc.UnknownServiceHandler(outhandler.handler),
+
+	var grpcServer = grpc.NewServer(
+		grpc.UnknownServiceHandler(handler.handle),
 	)
 
-	var inhandler = myHandler{
-		director: inboundDirector,
-	}
-	var grpcServerIn = grpc.NewServer(
-		grpc.UnknownServiceHandler(inhandler.handler),
-	)
-
-	defer grpcServerIn.GracefulStop()
-
-	defer grpcServerOut.GracefulStop()
-
-	h2Server := &http2.Server{}
-
-	for {
-		select {
-		case conn := <-Channel:
-			go h2Server.ServeConn(conn, &http2.ServeConnOpts{
-				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					// if else todo
-					grpcServerOut.ServeHTTP(w, r)
-				}),
-			})
-		}
-
-	}
+	grpcServer.Serve(ln)
 }
 
-func isOutbound(ip string, port int) bool {
-	//判断ip边界 或 port边界
-	return true
+func ServeListenerOut(ln net.Listener) {
+
+	defer ln.Close()
+	var handler = myHandler{
+		cycle: &outboundCycle{},
+	}
+
+	var grpcServer = grpc.NewServer(
+		grpc.UnknownServiceHandler(handler.handle),
+	)
+
+	grpcServer.Serve(ln)
+}
+
+type lifeCycle interface {
+	director(downCtx context.Context, md metadata.MD) (*shared.Lease, error)
+}
+type outboundCycle struct {
+	lifeCycle
+}
+
+func (*outboundCycle) director(downCtx context.Context, md metadata.MD) (*shared.Lease, error) {
+	cls := cluster.FindByName(md[":authority"][0]) //集群
+	ins := cls.Choose()                            //实例  todo by 勇道
+	if ins == nil {
+		return nil, errors.New("no instance")
+	}
+	lease, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
+	if err != nil {
+		return nil, err
+	}
+	return lease, nil
+}
+
+type inboundCycle struct {
+	lifeCycle
+	ins *localInstance.LocalInstance
+}
+
+func (c *inboundCycle) director(downCtx context.Context, md metadata.MD) (*shared.Lease, error) {
+	lease, err := c.ins.Pool.(*shared.Pool).Get(time.Second * 2)
+	if err != nil {
+		return nil, err
+	}
+	return lease, nil
 }
 
 type myHandler struct {
-	dstPort  int
-	director func(context.Context, metadata.MD) (*shared.Lease, error)
+	cycle lifeCycle
 }
 
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
-func (mh *myHandler) handler(srv interface{}, downstream grpc.ServerStream) error {
+func (mh *myHandler) handle(srv interface{}, downstream grpc.ServerStream) error {
 
 	downCtx := downstream.Context()
 	fullMethodName, ok := grpc.MethodFromServerStream(downstream)
@@ -81,7 +95,7 @@ func (mh *myHandler) handler(srv interface{}, downstream grpc.ServerStream) erro
 	md, _ := metadata.FromIncomingContext(downCtx) // header,是个copy
 	// outCtx := metadata.NewOutgoingContext(serverStream.Context(), md)
 
-	connLease, err := mh.director(downCtx, md)
+	connLease, err := mh.cycle.director(downCtx, md)
 	if err != nil {
 		return err
 	}
@@ -94,7 +108,7 @@ func (mh *myHandler) handler(srv interface{}, downstream grpc.ServerStream) erro
 	upstream, err := grpc.NewClientStream(upCtx, &grpc.StreamDesc{
 		ServerStreams: true,
 		ClientStreams: true,
-	}, connLease.GetConn(), fullMethodName) // 本身不产生网络传输
+	}, connLease.GetConn().(*grpc.ClientConn), fullMethodName) // 本身不产生网络传输
 	if err != nil {
 		return err
 	}
@@ -134,33 +148,6 @@ func (mh *myHandler) handler(srv interface{}, downstream grpc.ServerStream) erro
 		}
 	}
 	return status.Errorf(codes.Internal, "gRPC proxying should never reach this stage.")
-}
-
-func outboundDirector(downCtx context.Context, md metadata.MD) (*shared.Lease, error) {
-	cls := cluster.FindByName(md[":authority"][0]) //集群
-	ins := cls.Choose()                            //实例  todo by 勇道
-	if ins == nil {
-		return nil, errors.New("no instance")
-	}
-	lease, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
-	if err != nil {
-		return nil, err
-	}
-	return lease, nil
-}
-
-func inboundDirector(downCtx context.Context, md metadata.MD) (*shared.Lease, error) {
-	// cls := cluster.FindByName(md[":authority"][0], outbound) //集群
-	// ins := cls.Choose() //实例  todo by 勇道
-	ins := localInstance.FindByPort()
-	if ins == nil {
-		return nil, errors.New("no instance")
-	}
-	lease, err := ins.Pool.(*shared.Pool).Get(time.Second * 2) //连接
-	if err != nil {
-		return nil, err
-	}
-	return lease, nil
 }
 
 func forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan error {
@@ -235,14 +222,3 @@ func (l *newSingleConnListener) Close() error {
 func (l *newSingleConnListener) Addr() net.Addr {
 	return l.conn.LocalAddr()
 }
-
-// conn, err := ln.Accept()
-// if err != nil {
-// 	fmt.Println("Error accepting connection:", err)
-// 	continue
-// }
-// go h2Server.ServeConn(conn, &http2.ServeConnOpts{
-// 	Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-// 		grpcServer.ServeHTTP(w, r)
-// 	}),
-// })

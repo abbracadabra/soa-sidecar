@@ -5,15 +5,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"google.golang.org/grpc"
 )
 
 // 不用返还，连接不是独占
 // 独占式的连接用lru扩缩容
 // 共享式的连接用qps扩缩容
 // factory:返回连接、关闭方法、错误
-func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Duration, factory func() (*grpc.ClientConn, func(), error)) *Pool {
+func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Duration, factory func() (interface{}, error), closeFunc func(interface{})) *Pool {
 	if size <= 0 {
 		panic("size must be greater than 0")
 	}
@@ -28,6 +26,7 @@ func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Dur
 		conns:   make([]*PoolConn, size),
 		// locks:               make([]sync.Mutex, size),
 		maxConcurrentStream: maxConcurrentStream,
+		closeFunc:           closeFunc,
 	}
 
 	for i, _ := range p.conns {
@@ -46,16 +45,15 @@ func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Dur
 				if c.healthy {
 					return
 				}
-				newConn, closeFunc, err := factory()
+				newConn, err := factory()
 				if err != nil {
 					return
 				}
 				newPc := &PoolConn{
-					healthy:   true,
-					idx:       c.idx,
-					pool:      c.pool,
-					Conn:      newConn,
-					closeFunc: closeFunc,
+					healthy: true,
+					idx:     c.idx,
+					pool:    c.pool,
+					Conn:    newConn,
 				}
 				p.conns[i] = newPc
 			}()
@@ -66,7 +64,7 @@ func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Dur
 		defer ticker.Stop()
 
 		for range ticker.C {
-			var close []*grpc.ClientConn
+			var close []interface{}
 			func() {
 				p.Lock()
 				defer p.Unlock()
@@ -78,7 +76,7 @@ func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Dur
 				}
 			}()
 			for _, gc := range close {
-				gc.Close()
+				p.closeFunc(gc)
 			}
 		}
 	}()
@@ -90,7 +88,7 @@ type Lease struct {
 	conn    *PoolConn
 }
 
-func (l *Lease) GetConn() *grpc.ClientConn {
+func (l *Lease) GetConn() interface{} {
 	return l.conn.Conn
 }
 
@@ -107,9 +105,8 @@ type PoolConn struct {
 	healthy          bool
 	idx              int // 在array中的位置
 	pool             *Pool
-	Conn             *grpc.ClientConn
+	Conn             interface{}
 	concurrentStream int32
-	closeFunc        func()
 	// leaseBeginCb     func() // ??
 	// leaseEndCb       func() // ??
 }
@@ -126,23 +123,24 @@ func (pc *PoolConn) onLeaseReturn(healthy bool) {
 	defer atomic.AddInt32(&pc.concurrentStream, -1)
 	pc.healthy = healthy
 	if !healthy {
-		pc.closeFunc()
+		pc.pool.closeFunc(pc.Conn)
 	}
 }
 
 type Pool struct {
 	sync.Mutex
-	factory func() (*grpc.ClientConn, func(), error)
+	factory func() (interface{}, error)
 	conns   []*PoolConn
 	// locks               []sync.Mutex
 	maxConcurrentStream int32
+	closeFunc           func(interface{})
 }
 
 func (p *Pool) Shutdown() {
 	p.Lock()
 	defer p.Unlock()
 	for _, pc := range p.conns {
-		pc.closeFunc()
+		p.closeFunc(pc.Conn)
 	}
 }
 func (p *Pool) Get(waitTime time.Duration) (*Lease, error) {
@@ -202,16 +200,15 @@ func (p *Pool) tryGet() (*Lease, error) {
 		if c2.healthy {
 			return c2.acquireLease(), nil
 		}
-		newConn, closeFunc, err := p.factory()
+		newConn, err := p.factory()
 		if err != nil {
 			return nil, err
 		}
 		newC2 := &PoolConn{
-			healthy:   true,
-			idx:       c2.idx,
-			pool:      c2.pool,
-			Conn:      newConn,
-			closeFunc: closeFunc,
+			healthy: true,
+			idx:     c2.idx,
+			pool:    c2.pool,
+			Conn:    newConn,
 		}
 		p.conns[c2.idx] = newC2
 		return newC2.acquireLease(), nil

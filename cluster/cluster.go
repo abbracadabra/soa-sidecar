@@ -109,7 +109,7 @@ func FindByName(name string) *Cluster {
 
 func createPool(ins *Instance) interface{} {
 	// todo get service info/config
-	p := shared.NewPool(1, 1, 9999, time.Minute*1, func() (*grpc.ClientConn, func(), error) {
+	p := shared.NewPool(1, 1, 9999, time.Minute*1, func() (interface{}, error) {
 		ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
 		cc, err := grpc.DialContext(ctx, ins.IP+":"+strconv.Itoa(ins.Port), grpc.WithCodec(codec.Codec()), grpc.WithInsecure(), grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                10 * time.Second,
@@ -117,13 +117,13 @@ func createPool(ins *Instance) interface{} {
 			PermitWithoutStream: true, // 允许没有活跃流的心跳
 		}))
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 
-		return cc, func() {
-			cc.Close()
-		}, nil
+		return cc, nil
 
+	}, func(conn interface{}) {
+		conn.(*grpc.ClientConn).Close()
 	})
 	return p
 }

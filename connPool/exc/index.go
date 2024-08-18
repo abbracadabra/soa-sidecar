@@ -2,7 +2,6 @@ package exc
 
 import (
 	"errors"
-	"net"
 	"sync"
 	"time"
 )
@@ -15,7 +14,7 @@ import (
 
 type PoolConn struct {
 	sync.Mutex
-	Conn        net.Conn
+	Conn        interface{}
 	pool        *Pool
 	healthy     bool
 	lastPutTime time.Time
@@ -24,11 +23,11 @@ type PoolConn struct {
 type Pool struct {
 	idleConns chan *PoolConn
 	deadConns chan *PoolConn
-	factory   func() (net.Conn, error)
+	factory   func() (interface{}, error)
 	// maxIdleTime time.Duration
 }
 
-func NewConnPool(init, maxConns int, maxIdleTime, waitDuration time.Duration, factory func() (net.Conn, error)) *Pool {
+func NewConnPool(init, maxConns int, maxIdleTime, waitDuration time.Duration, factory func() (interface{}, error), closeFunc func(interface{})) *Pool {
 	if maxConns <= 0 {
 		maxConns = 1
 	}

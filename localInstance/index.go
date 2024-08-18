@@ -1,9 +1,24 @@
 package localInstance
 
-import "test/cluster"
+var InstanceMap = make(map[string]*LocalInstance)
 
-var InstanceMap = make(map[string]*cluster.Instance)
+// func FindByPort(ip string, port int) *LocalInstance {
+// 	return InstanceMap[ip+":"+strconv.Itoa(port)]
+// }
 
-func FindByPort(port int) *cluster.Instance {
-	return InstanceMap[name]
+// func AddInstance(ip string, port int) error {
+// 	InstanceMap[ip+":"+strconv.Itoa(port)] = &LocalInstance{
+// 		Pool: nil,
+// 		// servName: servName,
+// 		ip:   ip,
+// 		port: port,
+// 	}
+// 	return nil
+// }
+
+type LocalInstance struct {
+	ServName string
+	Ip       string
+	Port     int
+	Pool     interface{}
 }

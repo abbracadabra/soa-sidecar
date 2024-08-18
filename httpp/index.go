@@ -1,6 +1,7 @@
 package httpp
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -9,22 +10,22 @@ import (
 	"net/url"
 	"strconv"
 	"test/cluster"
-	"test/helper"
+	"test/localInstance"
 	"time"
 
 	"golang.org/x/net/http2"
 )
 
-var Channel = make(chan net.Conn)
+func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalInstance) {
+	defer ln.Close()
 
-func ServeConnListener() {
-
-	var ln net.Listener = helper.NewChanListener(Channel)
+	handler := &myHandler{outbound: false}
+	handler.cycle = &inboundCycle{ins: ins, servName: servName}
 
 	//http1
 	var err error
 	server := &http.Server{
-		Handler: http.HandlerFunc(handleInbound),
+		Handler: http.HandlerFunc(handler.handle),
 	}
 	//add http2 support to http1 server，这样能服务http1和2，http2.Server只支持http2
 	err = http2.ConfigureServer(server, &http2.Server{})
@@ -36,7 +37,30 @@ func ServeConnListener() {
 	if err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
 
+func ServeListenerOut(ln net.Listener) {
+
+	defer ln.Close()
+
+	handler := &myHandler{outbound: true}
+	handler.cycle = &outboundCycle{}
+
+	//http1
+	var err error
+	server := &http.Server{
+		Handler: http.HandlerFunc(handler.handle),
+	}
+	//add http2 support to http1 server，这样能服务http1和2，http2.Server只支持http2
+	err = http2.ConfigureServer(server, &http2.Server{})
+	if err != nil {
+		log.Fatalf("Failed to configure HTTP/2 server: %v", err)
+	}
+
+	err = server.Serve(ln)
+	if err != nil {
+		log.Fatalf("Server failed: %v", err)
+	}
 }
 
 var tr = &http.Transport{
@@ -49,19 +73,53 @@ var client = &http.Client{
 	Transport: tr,
 }
 
-func handleInbound(w http.ResponseWriter, r *http.Request) {
+type LifeCycle interface {
+	toReq(*http.Request) (*http.Request, error)
+}
+
+type outboundCycle struct {
+	LifeCycle
+}
+
+func (c *outboundCycle) toReq(r *http.Request) (*http.Request, error) {
+	host := r.Header.Get("Host")
+	cls := cluster.FindByName(host) //集群
+	ins := cls.Choose()             //实例  todo by 勇道
+
+	if ins == nil {
+		return nil, errors.New("no instance")
+	}
+
+	return http.NewRequest(r.Method, getFullURL(r, ins.IP+":"+strconv.Itoa(ins.Port)), r.Body)
+}
+
+type inboundCycle struct {
+	LifeCycle
+	servName string
+	ins      *localInstance.LocalInstance
+}
+
+func (c *inboundCycle) toReq(r *http.Request) (*http.Request, error) {
+	ins := c.ins
+	return http.NewRequest(r.Method, getFullURL(r, ins.Ip+":"+strconv.Itoa(ins.Port)), r.Body)
+}
+
+type myHandler struct {
+	cycle    LifeCycle
+	outbound bool
+}
+
+func (mh *myHandler) handle(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("start servingggg  serv")
 	defer r.Body.Close()
 
-	host := r.Header.Get("Host")
-	cls := cluster.FindByName(host, true) //集群
-	ins := cls.Choose()                   //实例  todo by 勇道
-	if ins == nil {
-		http.Error(w, "no instance", http.StatusInternalServerError)
+	req, err := mh.cycle.toReq(r)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	req, err := http.NewRequest(r.Method, getFullURL(r, ins.IP+":"+strconv.Itoa(ins.Port)), r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
