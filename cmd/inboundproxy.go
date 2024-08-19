@@ -54,12 +54,21 @@ func startTransparentIn(ip string, port int) error {
 
 func serveProtocolIn(servName string, transparent bool, ip string, port int, secure bool, protocol string) error {
 
-	var ins *localInstance.LocalInstance = &localInstance.LocalInstance{
+	var ins = &localInstance.LocalInstance{
 		ServName: servName,
 		Ip:       ip,
 		Port:     port,
-		Pool:     nil, //TODO
 	}
+
+	var pf func(*localInstance.LocalInstance) (interface{}, error)
+	if protocol == "grpc" {
+		pf = grpcc.PoolFactoryIn
+	}
+	_pool, err := pf(ins)
+	if err != nil {
+		return err
+	}
+	ins.Pool = _pool
 
 	if transparent {
 		inTransInServRule[strconv.Itoa(port)] = []any{secure, protocol, ins, servName}

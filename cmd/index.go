@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	"test/config"
+	"test/cmd/config"
 )
 
 func main() {

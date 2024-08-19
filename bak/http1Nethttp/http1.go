@@ -52,7 +52,7 @@ func handleServerInbound(r *http.Request, conn net.Conn) {
 
 	defer r.Body.Close()
 	// optional transcoding
-	cls := cluster.FindByName("example")
+	cls := cluster.GetOrCreate("example")
 	ins := cls.Lb.Choose()
 
 	addr := ins.IP + ":" + strconv.Itoa(ins.Port)

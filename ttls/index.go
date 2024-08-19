@@ -99,8 +99,8 @@ type outboundCycle struct {
 }
 
 func (*outboundCycle) director(serverName string) (net.Conn, error) {
-	cls := cluster.FindByName(serverName) //集群
-	ins := cls.Choose()                   //实例  todo by 勇道
+	cls := cluster.GetOrCreate(serverName) //集群
+	ins := cls.Choose()                    //实例  todo by 勇道
 	if ins == nil {
 		return nil, errors.New("no instance")
 	}

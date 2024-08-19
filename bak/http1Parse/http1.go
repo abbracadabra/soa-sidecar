@@ -59,7 +59,7 @@ func handleServerInbound(r *http.Request, conn net.Conn) (retErr error) {
 	// clusterName := "example"
 	// getCluster(clusterName) && start reading when create new conn
 
-	cls := cluster.FindByName("example")
+	cls := cluster.GetOrCreate("example")
 	ins := cls.Choose()
 
 	req, err := http.NewRequest(r.Method, getFullURL(r, "127.0.0.1:12345"), r.Body)

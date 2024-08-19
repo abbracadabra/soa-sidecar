@@ -6,7 +6,7 @@ import (
 	"io"
 	"net"
 	"test/cluster"
-	"test/connPool2/shared"
+	"test/connPool/shared"
 	"test/localInstance"
 	"time"
 
@@ -53,8 +53,8 @@ type outboundCycle struct {
 }
 
 func (*outboundCycle) director(downCtx context.Context, md metadata.MD) (*shared.Lease, error) {
-	cls := cluster.FindByName(md[":authority"][0]) //集群
-	ins := cls.Choose()                            //实例  todo by 勇道
+	cls := cluster.GetOrCreate(md[":authority"][0], poolFactoryOut) //集群
+	ins := cls.Choose()                                             //实例  todo by 勇道
 	if ins == nil {
 		return nil, errors.New("no instance")
 	}

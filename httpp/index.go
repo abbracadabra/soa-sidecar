@@ -83,8 +83,8 @@ type outboundCycle struct {
 
 func (c *outboundCycle) toReq(r *http.Request) (*http.Request, error) {
 	host := r.Header.Get("Host")
-	cls := cluster.FindByName(host) //集群
-	ins := cls.Choose()             //实例  todo by 勇道
+	cls := cluster.GetOrCreate(host) //集群
+	ins := cls.Choose()              //实例  todo by 勇道
 
 	if ins == nil {
 		return nil, errors.New("no instance")

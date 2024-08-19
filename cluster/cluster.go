@@ -26,10 +26,11 @@ type Instance struct {
 type Cluster struct {
 	sync.Mutex
 	initialized bool
-	name        string
+	servName    string
 	instances   []*Instance
 	lb          LbStrategy
-	poolFactory func() (interface{}, error) // big TODO
+	poolFactory PoolFactory // big TODO
+	meta        map[string]string
 	// connPoolingParams map[string]string
 }
 
@@ -37,7 +38,7 @@ func (c *Cluster) Choose() *Instance {
 	return c.lb.Choose()
 }
 
-func (c *Cluster) Add(ip string, port int, tags map[string]string) {
+func (c *Cluster) Add(ip string, port int, tags map[string]string) error {
 	c.Lock()
 	defer c.Unlock()
 	ins := Instance{
@@ -46,11 +47,16 @@ func (c *Cluster) Add(ip string, port int, tags map[string]string) {
 		Port:    port,
 		tags:    tags,
 	}
-	ins.Pool = createPool(&ins)
+	_pool, err := c.poolFactory(c, &ins)
+	if err != nil {
+		return err
+	}
+	ins.Pool = _pool
 	c.instances = append(c.instances, &ins)
+	return nil
 }
 
-func (c *Cluster) Update(services []model.SubscribeService) {
+func (c *Cluster) Update(services []model.SubscribeService) error {
 	c.Lock()
 	defer c.Unlock()
 	unchanged, added, removed := diff(c.instances, services)
@@ -65,27 +71,34 @@ func (c *Cluster) Update(services []model.SubscribeService) {
 			Port:    int(add.Port),
 			tags:    add.Metadata,
 		}
-		newIns.Pool = createPool(&newIns)
+		_pool, err := c.poolFactory(c, &newIns)
+		if err != nil {
+			return err
+		}
+		newIns.Pool = _pool
 		unchanged = append(unchanged, &newIns)
 	}
 	c.instances = unchanged
+	return nil
 }
 
-func NewCluster(name string) *Cluster {
-	cls := &Cluster{
-		name:      name,
-		instances: make([]*Instance, 0),
-	}
-	cls.lb = &RoundRobin{cls: cls}
-	return cls
-}
-
-// todo cluster factory param??
-func FindByName(name string) *Cluster {
+func GetOrCreate(name string, pf PoolFactory) *Cluster {
 	var cls *Cluster
 	_value, ok := outboundClusters.Load(name)
 	if !ok {
-		_value, _ = outboundClusters.LoadOrStore(name, NewCluster(name))
+		var servMeta = make(map[string]string)
+		cls := &Cluster{
+			servName:    name,
+			instances:   make([]*Instance, 0),
+			meta:        servMeta,
+			poolFactory: pf,
+		}
+		if servMeta["lb"] == Robin {
+			cls.lb = &RoundRobin{cls: cls}
+		} else {
+			cls.lb = &RoundRobin{cls: cls}
+		}
+		_value, _ := outboundClusters.LoadOrStore(name, cls)
 		cls = _value.(*Cluster)
 	} else {
 		cls = _value.(*Cluster)
@@ -101,27 +114,6 @@ func FindByName(name string) *Cluster {
 	cls.initialized = true
 	return cls
 }
-
-// func createPool(ins *Instance) interface{} {
-// 	// todo get service info/config
-// 	p := shared.NewPool(1, 1, 9999, time.Minute*1, func() (interface{}, error) {
-// 		ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
-// 		cc, err := grpc.DialContext(ctx, ins.IP+":"+strconv.Itoa(ins.Port), grpc.WithCodec(codec.Codec()), grpc.WithInsecure(), grpc.WithKeepaliveParams(keepalive.ClientParameters{
-// 			Time:                10 * time.Second,
-// 			Timeout:             3 * time.Second,
-// 			PermitWithoutStream: true, // 允许没有活跃流的心跳
-// 		}))
-// 		if err != nil {
-// 			return nil, err
-// 		}
-
-// 		return cc, nil
-
-// 	}, func(conn interface{}) {
-// 		conn.(*grpc.ClientConn).Close()
-// 	})
-// 	return p
-// }
 
 func diff(cached []*Instance, latest []model.SubscribeService) ([]*Instance, []*model.SubscribeService, []*Instance) {
 	shared := []*Instance{}
@@ -161,3 +153,5 @@ func diff(cached []*Instance, latest []model.SubscribeService) ([]*Instance, []*
 
 	return shared, newServices, removed
 }
+
+type PoolFactory func(*Cluster, *Instance) (interface{}, error)
