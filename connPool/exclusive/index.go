@@ -1,4 +1,4 @@
-package exc
+package exclusive
 
 import (
 	"errors"

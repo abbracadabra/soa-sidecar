@@ -1,23 +1,15 @@
 package cluster
 
 import (
-	"context"
 	"strconv"
 	"sync"
-	"test/codec"
+	"test/connPool/shared"
 	"test/nameService"
-	"time"
-
-	"test/connPool2/shared"
 
 	"github.com/nacos-group/nacos-sdk-go/model"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/keepalive"
 )
 
 var outboundClusters sync.Map
-
-var inboundClusters sync.Map
 
 type LbStrategy interface {
 	Choose() *Instance
@@ -37,6 +29,8 @@ type Cluster struct {
 	name        string
 	instances   []*Instance
 	lb          LbStrategy
+	poolFactory func() (interface{}, error) // big TODO
+	// connPoolingParams map[string]string
 }
 
 func (c *Cluster) Choose() *Instance {
@@ -77,15 +71,25 @@ func (c *Cluster) Update(services []model.SubscribeService) {
 	c.instances = unchanged
 }
 
-// 何为inbound，port是上报服务的
-func FindByName(name string) *Cluster {
-	// if outbound {
-	value, _ := outboundClusters.LoadOrStore(name, &Cluster{
+func NewCluster(name string) *Cluster {
+	cls := &Cluster{
 		name:      name,
-		lb:        &RoundRobin{},
 		instances: make([]*Instance, 0),
-	})
-	cls := value.(*Cluster)
+	}
+	cls.lb = &RoundRobin{cls: cls}
+	return cls
+}
+
+// todo cluster factory param??
+func FindByName(name string) *Cluster {
+	var cls *Cluster
+	_value, ok := outboundClusters.Load(name)
+	if !ok {
+		_value, _ = outboundClusters.LoadOrStore(name, NewCluster(name))
+		cls = _value.(*Cluster)
+	} else {
+		cls = _value.(*Cluster)
+	}
 	cls.Lock()
 	defer cls.Unlock()
 	if cls.initialized {
@@ -96,37 +100,28 @@ func FindByName(name string) *Cluster {
 	})
 	cls.initialized = true
 	return cls
-	// } else {
-	// 	value, _ := inboundClusters.LoadOrStore(name, &Cluster{
-	// 		name:        name,
-	// 		lb:          &RoundRobin{},
-	// 		instances:   make([]*Instance, 0),
-	// 		initialized: true,
-	// 	})
-	// 	return value.(*Cluster)
-	// }
 }
 
-func createPool(ins *Instance) interface{} {
-	// todo get service info/config
-	p := shared.NewPool(1, 1, 9999, time.Minute*1, func() (interface{}, error) {
-		ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
-		cc, err := grpc.DialContext(ctx, ins.IP+":"+strconv.Itoa(ins.Port), grpc.WithCodec(codec.Codec()), grpc.WithInsecure(), grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                10 * time.Second,
-			Timeout:             3 * time.Second,
-			PermitWithoutStream: true, // 允许没有活跃流的心跳
-		}))
-		if err != nil {
-			return nil, err
-		}
+// func createPool(ins *Instance) interface{} {
+// 	// todo get service info/config
+// 	p := shared.NewPool(1, 1, 9999, time.Minute*1, func() (interface{}, error) {
+// 		ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
+// 		cc, err := grpc.DialContext(ctx, ins.IP+":"+strconv.Itoa(ins.Port), grpc.WithCodec(codec.Codec()), grpc.WithInsecure(), grpc.WithKeepaliveParams(keepalive.ClientParameters{
+// 			Time:                10 * time.Second,
+// 			Timeout:             3 * time.Second,
+// 			PermitWithoutStream: true, // 允许没有活跃流的心跳
+// 		}))
+// 		if err != nil {
+// 			return nil, err
+// 		}
 
-		return cc, nil
+// 		return cc, nil
 
-	}, func(conn interface{}) {
-		conn.(*grpc.ClientConn).Close()
-	})
-	return p
-}
+// 	}, func(conn interface{}) {
+// 		conn.(*grpc.ClientConn).Close()
+// 	})
+// 	return p
+// }
 
 func diff(cached []*Instance, latest []model.SubscribeService) ([]*Instance, []*model.SubscribeService, []*Instance) {
 	shared := []*Instance{}
@@ -166,5 +161,3 @@ func diff(cached []*Instance, latest []model.SubscribeService) ([]*Instance, []*
 
 	return shared, newServices, removed
 }
-
-// var clusters map[string]*Cluster = make(map[string]*Cluster)
