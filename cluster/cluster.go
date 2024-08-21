@@ -36,7 +36,6 @@ type Cluster struct {
 	lb          InstanceRouter
 	poolFactory PoolFactory
 	meta        map[string]string
-	// connPoolingParams map[string]string
 }
 
 func (cls *Cluster) GetInstances() []*Instance {
@@ -57,7 +56,7 @@ func (c *Cluster) Add(ip string, port int, meta map[string]string) error {
 		Port:    port,
 		Meta:    meta,
 	}
-	if c.poolFactory == nil {
+	if c.poolFactory != nil {
 		_pool, err := c.poolFactory(c, &ins)
 		if err != nil {
 			return err
@@ -84,7 +83,7 @@ func (c *Cluster) Update(services []model.SubscribeService) error {
 			Port:    int(add.Port),
 			Meta:    add.Metadata,
 		}
-		if c.poolFactory == nil {
+		if c.poolFactory != nil {
 			_pool, err := c.poolFactory(c, &newIns)
 			if err != nil {
 				return err
