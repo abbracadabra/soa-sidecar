@@ -99,9 +99,9 @@ type outboundCycle struct {
 }
 
 func (*outboundCycle) director(serverName string) (net.Conn, error) {
-	cls := cluster.GetOrCreate(serverName, cluster.InstanceRouteByLaneCreator) //集群
+	cls := cluster.GetOrCreate(serverName) //集群
 	// tls只能访问主泳道，tls他没header
-	ins := cls.Choose("main") //实例
+	ins := cls.Choose(&cluster.RouteInfo{Color: "main"}) //实例
 	if ins == nil {
 		return nil, errors.New("no instance")
 	}

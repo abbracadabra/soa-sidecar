@@ -32,7 +32,7 @@ func startTransparent(ip string, port int, outbound bool) error {
 			continue
 		}
 		dstIp := ""
-		dstPort := 0 // todo
+		dstPort := 0 // todo 获取原始dst
 		spec, ok := servRule[strconv.Itoa(dstPort)]
 		if !ok {
 			return nil

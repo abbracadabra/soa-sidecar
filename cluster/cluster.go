@@ -1,16 +1,11 @@
 package cluster
 
 import (
+	"github.com/nacos-group/nacos-sdk-go/model"
 	"strconv"
 	"sync"
 	"test/connPool/shared"
-	"test/grpcc"
-	"test/nameService"
-
-	"github.com/nacos-group/nacos-sdk-go/model"
 )
-
-var outboundClusters sync.Map
 
 type InstanceStatus int
 
@@ -96,42 +91,6 @@ func (c *Cluster) Update(services []model.SubscribeService) error {
 	return nil
 }
 
-func GetOrCreate(name string, routeCreator InstanceRouterCreator) *Cluster {
-	var cls *Cluster
-	_value, ok := outboundClusters.Load(name)
-	if !ok {
-		var servMeta = nameService.GetServInfo(name)
-		cls = &Cluster{
-			servName:  name,
-			instances: make([]*Instance, 0),
-			meta:      servMeta,
-		}
-		ptc := servMeta["protocol"]
-		// caller without prior knowledge,e.g. read pre config cluster
-		switch ptc {
-		case "grpc":
-			cls.poolFactory = grpcc.PoolFactoryOut
-		}
-		if routeCreator != nil {
-			cls.lb = routeCreator(cls)
-		}
-		_value, _ := outboundClusters.LoadOrStore(name, cls)
-		cls = _value.(*Cluster)
-	} else {
-		cls = _value.(*Cluster)
-	}
-	cls.Lock()
-	defer cls.Unlock()
-	if cls.initialized {
-		return cls
-	}
-	nameService.Subscribe(name, func(services []model.SubscribeService, err error) {
-		cls.Update(services)
-	})
-	cls.initialized = true
-	return cls
-}
-
 func diff(cached []*Instance, latest []model.SubscribeService) ([]*Instance, []*model.SubscribeService, []*Instance) {
 	shared := []*Instance{}
 	newServices := []*model.SubscribeService{}
@@ -171,7 +130,7 @@ func diff(cached []*Instance, latest []model.SubscribeService) ([]*Instance, []*
 	return shared, newServices, removed
 }
 
-type InstanceRouterCreator func(*Cluster) InstanceRouter
+//type InstanceRouterCreator func(*Cluster) InstanceRouter
 
 type PoolFactory func(*Cluster, *Instance) (interface{}, error)
 
