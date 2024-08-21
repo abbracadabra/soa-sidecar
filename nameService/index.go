@@ -13,17 +13,17 @@ import (
 
 // var NS *NameService = createClient()
 
-var cli naming_client.INamingClient = createClient()
+var cli = createClient()
 
 // type NameService struct {
 // 	cli naming_client.INamingClient
 // }
 
-func Subscribe(name string, cb func(services []model.SubscribeService, err error)) {
+func Subscribe(servName string, cb func(services []model.SubscribeService, err error)) {
 	// Subscribe key=serviceName+groupName+cluster
 	// 注意:我们可以在相同的key添加多个SubscribeCallback.
 	var subscribeErr = cli.Subscribe(&vo.SubscribeParam{
-		ServiceName: "demo.go",
+		ServiceName: servName,
 		GroupName:   "group-a",             // 默认值DEFAULT_GROUP
 		Clusters:    []string{"cluster-a"}, // 默认值DEFAULT
 		SubscribeCallback: func(services []model.SubscribeService, err error) {
@@ -36,7 +36,20 @@ func Subscribe(name string, cb func(services []model.SubscribeService, err error
 }
 
 func Register(name string, ip string, port int) {
+	//todo
 
+}
+
+func GetServInfo(servName string) map[string]string {
+	inf, err := cli.GetService(vo.GetServiceParam{
+		ServiceName: servName,
+		Clusters:    []string{"cluster-a"}, // 默认值DEFAULT
+		GroupName:   "group-a",             // 默认值DEFAULT_GROUP
+	})
+	if err != nil {
+		panic(err)
+	}
+	return inf.Metadata
 }
 
 func createClient() naming_client.INamingClient {

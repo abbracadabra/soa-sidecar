@@ -53,8 +53,9 @@ type outboundCycle struct {
 }
 
 func (*outboundCycle) director(downCtx context.Context, md metadata.MD) (*shared.Lease, error) {
-	cls := cluster.GetOrCreate(md[":authority"][0], poolFactoryOut) //集群
-	ins := cls.Choose()                                             //实例  todo by 勇道
+	cls := cluster.GetOrCreate(md[":authority"][0], cluster.InstanceRouteByLaneCreator) //集群
+	//筛泳道、再lb  //key、lane、set
+	ins := cls.Choose(md["lane"]) //实例
 	if ins == nil {
 		return nil, errors.New("no instance")
 	}
