@@ -19,14 +19,10 @@ import (
 
 func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalInstance) {
 	defer ln.Close()
-
-	handler := &myHandler{outbound: false}
-	handler.cycle = &inboundCycle{ins: ins, servName: servName}
-
 	//http1
 	var err error
 	server := &http.Server{
-		Handler: http.HandlerFunc(handler.handle),
+		Handler: http.HandlerFunc(createHandler(&inboundCycle{ins: ins, servName: servName})),
 	}
 	//add http2 support to http1 server，这样能服务http1和2，http2.Server只支持http2
 	err = http2.ConfigureServer(server, &http2.Server{})
@@ -40,17 +36,55 @@ func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalI
 	}
 }
 
+func createHandler(hook LifeCycle) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("start servingggg  serv")
+		defer r.Body.Close()
+
+		req, err := hook.toReq(r)
+
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		for key, values := range r.Header {
+			for _, value := range values {
+				req.Header.Add(key, value)
+			}
+		}
+
+		//开始转发流量，downstream upstream侧任何一方错误，那么两侧连接或stream不能用，无需再读取完Body，proxy两侧处理好超时即可
+		var success bool
+		defer func() {
+			if !success {
+				fmt.Println("转发异常")
+			}
+		}()
+		resp, err := forwardReq(req, client)
+		defer func() {
+			if resp.Body != nil {
+				resp.Body.Close()
+			}
+		}()
+		if err != nil {
+			return
+		}
+		err = forwardResp(resp, w)
+		if err != nil {
+			return
+		}
+		success = true
+	}
+
+}
+
 func ServeListenerOut(ln net.Listener) {
-
 	defer ln.Close()
-
-	handler := &myHandler{outbound: true}
-	handler.cycle = &outboundCycle{}
-
 	//http1
 	var err error
 	server := &http.Server{
-		Handler: http.HandlerFunc(handler.handle),
+		Handler: http.HandlerFunc(createHandler(&outboundCycle{})),
 	}
 	//add http2 support to http1 server，这样能服务http1和2，http2.Server只支持http2
 	err = http2.ConfigureServer(server, &http2.Server{})
@@ -103,55 +137,6 @@ type inboundCycle struct {
 func (c *inboundCycle) toReq(r *http.Request) (*http.Request, error) {
 	ins := c.ins
 	return http.NewRequest(r.Method, getFullURL(r, ins.Ip+":"+strconv.Itoa(ins.Port)), r.Body)
-}
-
-type myHandler struct {
-	cycle    LifeCycle
-	outbound bool
-}
-
-func (mh *myHandler) handle(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("start servingggg  serv")
-	defer r.Body.Close()
-
-	req, err := mh.cycle.toReq(r)
-
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	for key, values := range r.Header {
-		for _, value := range values {
-			req.Header.Add(key, value)
-		}
-	}
-
-	//开始转发流量，downstream upstream侧任何一方错误，那么两侧连接或stream不能用，无需再读取完Body，proxy两侧处理好超时即可
-	var success bool
-	defer func() {
-		if !success {
-			fmt.Println("转发异常")
-		}
-	}()
-	resp, err := forwardReq(req, client)
-	defer func() {
-		if resp.Body != nil {
-			resp.Body.Close()
-		}
-	}()
-	if err != nil {
-		return
-	}
-	err = forwardResp(resp, w)
-	if err != nil {
-		return
-	}
-	success = true
 }
 
 func forwardReq(r *http.Request, client *http.Client) (*http.Response, error) {
