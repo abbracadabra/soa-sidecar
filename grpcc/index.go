@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"test/utils/servNameUtil"
 )
 
 // https://github.com/mwitkow/grpc-proxy
@@ -54,7 +55,8 @@ type outboundCycle struct {
 }
 
 func (*outboundCycle) director(downCtx context.Context, md metadata.MD) (*shared.Lease, error) {
-	cls := cluster.GetOrCreate(md[":authority"][0]) //集群
+	servName := servNameUtil.ExtractServName(md[":authority"][0])
+	cls := cluster.GetOrCreate(servName) //集群
 	//筛泳道、再lb  //key、lane、set
 	ins := cls.Choose(&cluster.RouteInfo{Color: md["lane"][0]}) //实例
 	if ins == nil {
@@ -85,7 +87,7 @@ type myHandler struct {
 }
 
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
-func (mh *myHandler) handle(srv interface{}, downstream grpc.ServerStream) error {
+func (mh *myHandler) handle(server interface{}, downstream grpc.ServerStream) error {
 
 	downCtx := downstream.Context()
 	fullMethodName, ok := grpc.MethodFromServerStream(downstream)

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"test/cluster"
 	"test/localInstance"
+	"test/utils/servNameUtil"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -82,7 +83,7 @@ type outboundCycle struct {
 }
 
 func (c *outboundCycle) toReq(r *http.Request) (*http.Request, error) {
-	host := r.Header.Get("Host")
+	host := servNameUtil.ExtractServName(r.Header.Get("Host"))
 	cls := cluster.GetOrCreate(host)                                   //集群
 	ins := cls.Choose(&cluster.RouteInfo{Color: r.Header.Get("lane")}) //实例
 

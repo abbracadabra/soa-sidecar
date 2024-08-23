@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"test/cluster"
 	"test/localInstance"
+	"test/utils/servNameUtil"
 )
 
 func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalInstance) {
@@ -98,8 +99,9 @@ type outboundCycle struct {
 	lifeCycle
 }
 
-func (*outboundCycle) director(serverName string) (net.Conn, error) {
-	cls := cluster.GetOrCreate(serverName) //集群
+func (*outboundCycle) director(host string) (net.Conn, error) {
+	servName := servNameUtil.ExtractServName(host)
+	cls := cluster.GetOrCreate(servName) //集群
 	// tls只能访问主泳道，tls他没header
 	ins := cls.Choose(&cluster.RouteInfo{Color: "main"}) //实例
 	if ins == nil {
