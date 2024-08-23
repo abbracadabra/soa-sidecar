@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+// https://github.com/mwitkow/grpc-proxy
 func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalInstance) {
 
 	defer ln.Close()
@@ -113,39 +114,33 @@ func (mh *myHandler) handle(srv interface{}, downstream grpc.ServerStream) error
 	if err != nil {
 		return err
 	}
-	// Explicitly *do not close* s2cErrChan and c2sErrChan, otherwise the select below will not terminate.
-	// Channels do not have to be closed, it is just a control flow mechanism, see
-	// https://groups.google.com/forum/#!msg/golang-nuts/pZwdYRGxCIk/qpbHxRRPJdUJ
-	s2cErrChan := forwardServerToClient(downstream, upstream)
-	c2sErrChan := forwardClientToServer(upstream, downstream)
+	// Explicitly *do not close* s2cErrChan and c2sErrChan, otherwise the select below will not terminate. Channels do not have to be closed, it is just a control flow mechanism, see https://groups.google.com/forum/#!msg/golang-nuts/pZwdYRGxCIk/qpbHxRRPJdUJ
+	d2uErrChan := forwardServerToClient(downstream, upstream)
+	u2dErrChan := forwardClientToServer(upstream, downstream)
 	// We don't know which side is going to stop sending first, so we need a select between the two.
 	for i := 0; i < 2; i++ {
 		select {
-		case s2cErr := <-s2cErrChan:
-			if s2cErr == io.EOF {
-				// this is the happy case where the sender has encountered io.EOF, and won't be sending anymore./
-				// the clientStream>serverStream may continue pumping though.
+		case d2uErr := <-d2uErrChan:
+			if d2uErr == io.EOF {
+				// this is the happy case where the sender has encountered io.EOF, and won't be sending anymore.the clientStream>serverStream may continue pumping though.
 				upstream.CloseSend()
 			} else {
-				// however, we may have gotten a receive error (stream disconnected, a read error etc) in which case we need
-				// to cancel the clientStream to the backend, let all of its goroutines be freed up by the CancelFunc and
-				// exit with an error to the stack
+				// however, we may have gotten a receive error (stream disconnected, a read error etc) in which case we need to cancel the clientStream to the backend, let all of its goroutines be freed up by the CancelFunc and exit with an error to the stack
 				connLease.Unhealthy() // todo err区分upstream disconn or downstream disconn,upstream disconn才Unhealthy
 				upCancel()
-				return status.Errorf(codes.Internal, "failed proxying s2c: %v", s2cErr)
+				return status.Errorf(codes.Internal, "failed proxying d2u: %v", d2uErr)
 			}
-		case c2sErr := <-c2sErrChan:
-			// This happens when the clientStream has nothing else to offer (io.EOF), returned a gRPC error. In those two
-			// cases we may have received Trailers as part of the call. In case of other errors (stream closed) the trailers
-			// will be nil.
+		case u2dErr := <-u2dErrChan:
+			// This happens when the clientStream has nothing else to offer (io.EOF), returned a gRPC error. In those two cases we may have received Trailers as part of the call. In case of other errors (stream closed) the trailers will be nil.
 			//trailer最后才能获取到
 			//发送trailer
 			downstream.SetTrailer(upstream.Trailer())
-			if c2sErr == io.EOF {
+			if u2dErr == io.EOF {
 				return nil
 			}
+			connLease.Unhealthy()
 			// c2sErr will contain RPC error from client code. If not io.EOF return the RPC error as server stream error.
-			return c2sErr
+			return u2dErr
 		}
 	}
 	return status.Errorf(codes.Internal, "gRPC proxying should never reach this stage.")
@@ -161,9 +156,7 @@ func forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan er
 				break
 			}
 			if i == 0 {
-				// This is a bit of a hack, but client to server headers are only readable after first client msg is
-				// received but must be written to server stream before the first msg is flushed.
-				// This is the only place to do it nicely.
+				// This is a bit of a hack, but client to server headers are only readable after first client msg is received but must be written to server stream before the first msg is flushed. This is the only place to do it nicely.
 				md, err := src.Header()
 				if err != nil {
 					ret <- err
@@ -201,25 +194,4 @@ func forwardServerToClient(src grpc.ServerStream, dst grpc.ClientStream) chan er
 		}
 	}()
 	return ret
-}
-
-type newSingleConnListener struct {
-	conn net.Conn
-	done bool
-}
-
-func (l *newSingleConnListener) Accept() (net.Conn, error) {
-	if l.done {
-		return nil, io.EOF
-	}
-	l.done = true
-	return l.conn, nil
-}
-
-func (l *newSingleConnListener) Close() error {
-	return l.conn.Close()
-}
-
-func (l *newSingleConnListener) Addr() net.Addr {
-	return l.conn.LocalAddr()
 }

@@ -43,14 +43,15 @@ func NewSingleConnListener(conn net.Conn) net.Listener {
 	}
 }
 
-// func main() {
-// 	// 示例使用
-// 	listener := NewSingleConnListener(someConn) // someConn 是你要包装的 net.Conn
-// 	conn, err := listener.Accept()
-// 	if err != nil {
-// 		// 处理错误
-// 	}
-// 	defer conn.Close()
-
-// 	// 使用 conn 进行读写
-// }
+//
+//func main() {
+//	// 示例使用
+//	listener := NewSingleConnListener(someConn) // someConn 是你要包装的 net.Conn
+//	conn, err := listener.Accept()
+//	if err != nil {
+//		// 处理错误
+//	}
+//	defer conn.Close()
+//
+//	// 使用 conn 进行读写
+//}
