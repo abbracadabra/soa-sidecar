@@ -117,60 +117,68 @@ func (mh *myHandler) handle(server interface{}, downstream grpc.ServerStream) er
 		return err
 	}
 	// Explicitly *do not close* s2cErrChan and c2sErrChan, otherwise the select below will not terminate. Channels do not have to be closed, it is just a control flow mechanism, see https://groups.google.com/forum/#!msg/golang-nuts/pZwdYRGxCIk/qpbHxRRPJdUJ
-	d2uErrChan := forwardServerToClient(downstream, upstream)
-	u2dErrChan := forwardClientToServer(upstream, downstream)
+	d2uErrChan := forwardDown2Up(downstream, upstream)
+	u2dErrChan := forwardUp2Down(upstream, downstream)
 	// We don't know which side is going to stop sending first, so we need a select between the two.
 	for i := 0; i < 2; i++ {
 		select {
 		case d2uErr := <-d2uErrChan:
-			if d2uErr == io.EOF {
+			err := d2uErr[0]
+			isUpstreamErr := d2uErr[1].(bool)
+			if err == io.EOF {
 				// this is the happy case where the sender has encountered io.EOF, and won't be sending anymore.the clientStream>serverStream may continue pumping though.
 				upstream.CloseSend()
 			} else {
 				// however, we may have gotten a receive error (stream disconnected, a read error etc) in which case we need to cancel the clientStream to the backend, let all of its goroutines be freed up by the CancelFunc and exit with an error to the stack
-				connLease.Unhealthy() // todo err区分upstream disconn or downstream disconn,upstream disconn才Unhealthy
+				if isUpstreamErr {
+					connLease.Unhealthy()
+				}
 				upCancel()
-				return status.Errorf(codes.Internal, "failed proxying d2u: %v", d2uErr)
+				return status.Errorf(codes.Internal, "failed proxying d2u: %v", err)
 			}
 		case u2dErr := <-u2dErrChan:
+			err := u2dErr[0].(error)
+			isUpstreamErr := u2dErr[1].(bool)
 			// This happens when the clientStream has nothing else to offer (io.EOF), returned a gRPC error. In those two cases we may have received Trailers as part of the call. In case of other errors (stream closed) the trailers will be nil.
 			//trailer最后才能获取到
 			//发送trailer
 			downstream.SetTrailer(upstream.Trailer())
-			if u2dErr == io.EOF {
+			if err == io.EOF {
 				return nil
 			}
-			connLease.Unhealthy()
+			if isUpstreamErr {
+				connLease.Unhealthy()
+			}
 			// c2sErr will contain RPC error from client code. If not io.EOF return the RPC error as server stream error.
-			return u2dErr
+			return err
 		}
 	}
 	return status.Errorf(codes.Internal, "gRPC proxying should never reach this stage.")
 }
 
-func forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan error {
-	ret := make(chan error, 1)
+func forwardUp2Down(src grpc.ClientStream, dst grpc.ServerStream) chan [2]any {
+	ret := make(chan [2]any, 1)
 	go func() {
 		f := &emptypb.Empty{}
 		for i := 0; ; i++ {
 			if err := src.RecvMsg(f); err != nil {
-				ret <- err // this can be io.EOF which is happy case
+				ret <- [2]any{err, true} // this can be io.EOF which is happy case
 				break
 			}
 			if i == 0 {
 				// This is a bit of a hack, but client to server headers are only readable after first client msg is received but must be written to server stream before the first msg is flushed. This is the only place to do it nicely.
 				md, err := src.Header()
 				if err != nil {
-					ret <- err
+					ret <- [2]any{err, true}
 					break
 				}
 				if err := dst.SendHeader(md); err != nil {
-					ret <- err
+					ret <- [2]any{err, false}
 					break
 				}
 			}
 			if err := dst.SendMsg(f); err != nil {
-				ret <- err
+				ret <- [2]any{err, false}
 				break
 			}
 		}
@@ -178,19 +186,19 @@ func forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan er
 	return ret
 }
 
-func forwardServerToClient(src grpc.ServerStream, dst grpc.ClientStream) chan error {
-	ret := make(chan error, 1)
+func forwardDown2Up(src grpc.ServerStream, dst grpc.ClientStream) chan [2]any {
+	ret := make(chan [2]any, 1)
 	go func() {
 		//protoimpl.UnknownFields 是 protobuf 实现的一部分
 		//如果一个应用程序接收到一个包含未识别字段的消息，然后将该消息转发给其他服务，它可以保留这些未知字段并将它们包括在转发的消息中
 		f := &emptypb.Empty{}
 		for i := 0; ; i++ {
 			if err := src.RecvMsg(f); err != nil {
-				ret <- err // this can be io.EOF which is happy case
+				ret <- [2]any{err, false} // this can be io.EOF which is happy case
 				break
 			}
 			if err := dst.SendMsg(f); err != nil {
-				ret <- err
+				ret <- [2]any{err, true}
 				break
 			}
 		}
