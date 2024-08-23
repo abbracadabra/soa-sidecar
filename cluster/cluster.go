@@ -14,12 +14,13 @@ const (
 )
 
 type Instance struct {
-	cluster *Cluster
-	IP      string
-	Port    int
-	Status  InstanceStatus
-	Pool    interface{}
-	Meta    map[string]string
+	cluster    *Cluster
+	IP         string
+	Port       int
+	Status     InstanceStatus
+	Pool       interface{}
+	Meta       map[string]string
+	statistics map[string]any
 	//idc todo
 }
 
