@@ -21,7 +21,7 @@ func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalI
 
 	defer ln.Close()
 	var handler = myHandler{
-		cycle: &inboundCycle{ins: ins},
+		phaseHook: &inboundCycle{ins: ins},
 	}
 
 	var grpcServer = grpc.NewServer(
@@ -35,7 +35,7 @@ func ServeListenerOut(ln net.Listener) {
 
 	defer ln.Close()
 	var handler = myHandler{
-		cycle: &outboundCycle{},
+		phaseHook: &outboundCycle{},
 	}
 
 	var grpcServer = grpc.NewServer(
@@ -80,7 +80,7 @@ func (c *inboundCycle) director(downCtx context.Context, md metadata.MD) (*share
 }
 
 type myHandler struct {
-	cycle lifeCycle
+	phaseHook lifeCycle
 }
 
 // 如果 streamHandler 返回一个 error，gRPC 服务器会将这个错误作为响应的一部分发送回客户端。具体来说，gRPC 会将错误转换为 gRPC 状态码和错误消息，然后返回给客户端
@@ -96,7 +96,7 @@ func (mh *myHandler) handle(srv interface{}, downstream grpc.ServerStream) error
 	md, _ := metadata.FromIncomingContext(downCtx) // header,是个copy
 	// outCtx := metadata.NewOutgoingContext(serverStream.Context(), md)
 
-	connLease, err := mh.cycle.director(downCtx, md)
+	connLease, err := mh.phaseHook.director(downCtx, md)
 	if err != nil {
 		return err
 	}

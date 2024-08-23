@@ -5,5 +5,11 @@ soa基础设施（服务路由、负载均衡、连接池、限流、熔断、�
 - 支持出流量、入流量代理  
 - 支持透明代理  
 - 支持sidecarless 模式  
+  
+  
+  
+todo:  
+- thin sdk
+- soa-sidecar 灰度升级（thin sdk 或者 socket fd迁移）  
 
 

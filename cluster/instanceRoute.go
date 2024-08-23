@@ -14,7 +14,7 @@ type RouteInfo struct {
 // 同机房  同泳道  路由hashkey
 // 因路由hashkey需要每个cls有额外数据结构，需要闭包环境
 func instanceRouteByLaneCreator(cls *Cluster) InstanceRouter {
-	stickyMap := sync.Map{}
+	stickyMap := sync.Map{} // 闭包内字段
 	return func(routeInfo interface{}) *Instance {
 		rf := routeInfo.(*RouteInfo)
 		bind, sticky := stickyMap.Load(rf.Key)

@@ -24,6 +24,7 @@ type Pool struct {
 	idleConns chan *PoolConn
 	deadConns chan *PoolConn
 	factory   func() (interface{}, error)
+	closeFunc func(interface{})
 	// maxIdleTime time.Duration
 }
 
@@ -41,6 +42,7 @@ func NewConnPool(init, maxConns int, maxIdleTime, waitDuration time.Duration, fa
 		idleConns: make(chan *PoolConn, maxConns),
 		deadConns: make(chan *PoolConn, maxConns),
 		factory:   factory,
+		closeFunc: closeFunc,
 		// maxIdleTime: maxIdleTime,
 	}
 
@@ -77,7 +79,7 @@ func NewConnPool(init, maxConns int, maxIdleTime, waitDuration time.Duration, fa
 				select {
 				case pc := <-pool.idleConns:
 					if time.Since(pc.lastPutTime) > maxIdleTime {
-						pc.Conn.Close()
+						closeFunc(pc.Conn)
 						pc.healthy = false
 						pool.deadConns <- pc
 					} else {
@@ -124,7 +126,7 @@ func (pc *PoolConn) Return() {
 		return
 	}
 	if !pc.healthy {
-		pc.Conn.Close()
+		pc.pool.closeFunc(pc.Conn)
 	}
 	wrap := &PoolConn{
 		Conn:        pc.Conn,
