@@ -53,6 +53,7 @@ func serveProtocolOut(transparent bool, ip string, port int, secure bool, protoc
 
 	if transparent {
 		outServRule[strconv.Itoa(port)] = []any{secure, protocol}
+		return nil
 	}
 
 	ln, err := net.Listen("tcp", ip+":"+strconv.Itoa(port))

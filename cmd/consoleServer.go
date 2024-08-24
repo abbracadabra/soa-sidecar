@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"test/cmd/config"
 	"test/nameService"
 )
 
@@ -13,6 +14,7 @@ type ReportServ struct {
 	ip           string
 	port         int
 	transparent  bool
+	proxyIp      string
 	proxyPort    int
 	secure       bool
 	protocol     string
@@ -44,16 +46,23 @@ func inboundExportHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(err)
 	}
 
-	serveProtocolIn(result.servName, result.transparent, result.ip, result.port, result.secure, result.protocol)
+	cfg, _ := config.GetOrReadConfig()
+	//transparentMode :=  != nil
+	serveProtocolIn(result.servName, result.ip, result.port, result.proxyIp, result.proxyPort, cfg.InboundTransparent, result.secure, result.protocol)
 
 	//TODO
 	if result.pushRegistry {
-		nameService.Register(result.servName, result.ip, result.port)
+		nameService.Heartbeat(result.servName, result.proxyIp, result.proxyPort)
 	}
+}
+
+func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
+	nameService.Heartbeat(r.URL.Query().Get("name"))
 }
 
 func startConsoleServer(ip string, port int) {
 	http.HandleFunc("/export", inboundExportHandler)
+	http.HandleFunc("/heartbeat", heartbeatHandler)
 
 	fmt.Println("Starting server at port 8080")
 	if err := http.ListenAndServe(ip+":"+strconv.Itoa(port), nil); err != nil {

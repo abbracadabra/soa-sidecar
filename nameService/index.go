@@ -35,8 +35,11 @@ func Subscribe(servName string, cb func(services []model.SubscribeService, err e
 	fmt.Println(subscribeErr.Error())
 }
 
-func Register(name string, ip string, port int) {
-	//todo
+func Heartbeat(name string) {
+
+}
+
+func UpdateInstance(name string) {
 
 }
 

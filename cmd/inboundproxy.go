@@ -33,7 +33,7 @@ func startTransparentIn(ip string, port int) error {
 		}
 		dstIp := ""
 		dstPort := 0 // todo
-		spec, ok := inTransInServRule[strconv.Itoa(dstPort)]
+		spec, ok := inTransInServRule[dstIp+":"+strconv.Itoa(dstPort)]
 		if !ok {
 			return nil
 		}
@@ -52,7 +52,7 @@ func startTransparentIn(ip string, port int) error {
 	}
 }
 
-func serveProtocolIn(servName string, transparent bool, ip string, port int, secure bool, protocol string) error {
+func serveProtocolIn(servName string, ip string, port int, proxyIp string, proxyPort int, transparent bool, secure bool, protocol string) error {
 
 	var ins = &localInstance.LocalInstance{
 		ServName: servName,
@@ -71,10 +71,11 @@ func serveProtocolIn(servName string, transparent bool, ip string, port int, sec
 	ins.Pool = _pool
 
 	if transparent {
-		inTransInServRule[strconv.Itoa(port)] = []any{secure, protocol, ins, servName}
+		inTransInServRule[proxyIp+":"+strconv.Itoa(proxyPort)] = []any{secure, protocol, ins, servName}
+		return nil
 	}
 
-	ln, err := net.Listen("tcp", ip+":"+strconv.Itoa(port))
+	ln, err := net.Listen("tcp", proxyIp+":"+strconv.Itoa(proxyPort))
 	if err != nil {
 		fmt.Println("Error setting up TCP listener:", err)
 		return nil
