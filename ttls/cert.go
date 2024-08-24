@@ -6,20 +6,17 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"fmt"
 	"math/big"
 	"sync"
 	"time"
 )
 
 func GetCertificateForSNI(clientHello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	fmt.Println("start servingggg cert xokk " + clientHello.ServerName)
 	domain := clientHello.ServerName
 	cert, err := GetCert(domain)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("start servingggg cert okk")
 	return cert, nil
 }
 

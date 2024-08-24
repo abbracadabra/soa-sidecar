@@ -1,14 +1,20 @@
 package nameService
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"log"
-
 	"github.com/nacos-group/nacos-sdk-go/clients"
 	"github.com/nacos-group/nacos-sdk-go/clients/naming_client"
 	"github.com/nacos-group/nacos-sdk-go/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/model"
 	"github.com/nacos-group/nacos-sdk-go/vo"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 )
 
 // var NS *NameService = createClient()
@@ -35,12 +41,69 @@ func Subscribe(servName string, cb func(services []model.SubscribeService, err e
 	fmt.Println(subscribeErr.Error())
 }
 
-func Heartbeat(name string) {
+var client = &http.Client{}
+var servers = make([][3]any, 3)
 
+func choose() *[3]any {
+	var ins *[3]any
+	for _, ins = range servers {
+		if ins[2] == true {
+			break
+		}
+	}
+	if ins == nil {
+		ins = &servers[0]
+	}
+	return ins
+}
+
+// https://nacos.io/zh-cn/docs/v2/guide/user/open-api.html
+func RegisterInstance(servName string, ip string, port int, tags map[string]string) error {
+
+	var ins = choose()
+	// 构建请求数据
+	data := url.Values{}
+	data.Set("serviceName", servName)
+	data.Set("ip", ip)
+	data.Set("port", strconv.Itoa(port))
+	jsonTags, _ := json.Marshal(tags)
+	data.Set("metadata", string(jsonTags))
+
+	// 创建请求
+	req, err := http.NewRequest("POST", "http://"+ins[0].(string)+":"+strconv.Itoa(ins[1].(int))+"/nacos/v2/ns/instance", bytes.NewBufferString(data.Encode()))
+	if err != nil {
+		panic(err)
+	}
+
+	// 设置Content-Type
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	// 发送请求
+	resp, err := client.Do(req)
+	defer resp.Body.Close()
+	if err != nil {
+		ins[2] = false
+		return err
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	bodyStr := string(bodyBytes)
+	success := strings.Contains(bodyStr, "success")
+	if success {
+		return nil
+	}
+	return fmt.Errorf("register instance failed, %s", bodyStr)
+}
+
+func Heartbeat(servName string, ip string, port int, tags map[string]string) {
+	//TODO
 }
 
 func UpdateInstance(name string) {
-
+	//TODO
 }
 
 func GetServInfo(servName string) map[string]string {

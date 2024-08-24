@@ -38,7 +38,6 @@ func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalI
 
 func createHandler(hook LifeCycle) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("start servingggg  serv")
 		defer r.Body.Close()
 
 		req, err := hook.toReq(r)

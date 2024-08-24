@@ -10,61 +10,59 @@ import (
 	"test/nameService"
 )
 
-type ReportServ struct {
-	ip           string
-	port         int
-	transparent  bool
-	proxyIp      string
-	proxyPort    int
-	secure       bool
-	protocol     string
-	pushRegistry bool
+type reportServ struct {
+	ip          string
+	port        int
+	transparent bool
+	proxyIp     string
+	proxyPort   int
+	secure      bool
+	protocol    string
 	//注册中心参数
+	export   bool
 	servName string
 	tags     map[string]string
 }
 
-/*
-if trans
+type heartbeatMsg struct {
+	proxyIp   string
+	proxyPort int
+	servName  string
+	tags      map[string]string
+}
 
-	addServRule
-
-else
-
-	open port
-
-add local instance mapping, init instance conn pool
-if export2Reg
-
-	invoke nacos
-*/
 func inboundExportHandler(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(r.Body)
-	var result ReportServ
-	err = json.Unmarshal(data, &result)
+	var msg reportServ
+	err = json.Unmarshal(data, &data)
 	if err != nil {
 		fmt.Println(err)
 	}
 
 	cfg, _ := config.GetOrReadConfig()
-	//transparentMode :=  != nil
-	serveProtocolIn(result.servName, result.ip, result.port, result.proxyIp, result.proxyPort, cfg.InboundTransparent, result.secure, result.protocol)
+	serveProtocolIn(msg.servName, msg.ip, msg.port, msg.proxyIp, msg.proxyPort, cfg.InboundTransparent, msg.secure, msg.protocol)
 
-	//TODO
-	if result.pushRegistry {
-		nameService.Heartbeat(result.servName, result.proxyIp, result.proxyPort)
-	}
+	//if msg.export {
+	//	nameService.Heartbeat(msg.servName, msg.proxyIp, msg.proxyPort, msg.tags)
+	//}
 }
 
 func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
-	nameService.Heartbeat(r.URL.Query().Get("name"))
+	data, err := io.ReadAll(r.Body)
+	var msg heartbeatMsg
+	err = json.Unmarshal(data, &msg)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	nameService.RegisterInstance(msg.servName, msg.proxyIp, msg.proxyPort, msg.tags)
 }
 
 func startConsoleServer(ip string, port int) {
-	http.HandleFunc("/export", inboundExportHandler)
-	http.HandleFunc("/heartbeat", heartbeatHandler)
+	http.HandleFunc("/startProxy", inboundExportHandler)
+	http.HandleFunc("/exportService", heartbeatHandler)
 
-	fmt.Println("Starting server at port 8080")
+	fmt.Printf("Starting server at %s:%d\n", ip, port)
 	if err := http.ListenAndServe(ip+":"+strconv.Itoa(port), nil); err != nil {
 		fmt.Println("Error starting server:", err)
 	}
