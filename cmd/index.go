@@ -6,10 +6,7 @@ import (
 
 func main() {
 
-	cfg, err := config.GetOrReadConfig()
-	if err != nil {
-		panic(err)
-	}
+	cfg := config.GetConfig()
 	//控制台
 	startConsoleServer(cfg.Console.Ip, cfg.Console.Port)
 	//监听透明代理端口，出流量

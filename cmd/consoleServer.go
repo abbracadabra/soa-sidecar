@@ -39,7 +39,7 @@ func inboundExportHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(err)
 	}
 
-	cfg, _ := config.GetOrReadConfig()
+	cfg := config.GetConfig()
 	serveProtocolIn(msg.servName, msg.ip, msg.port, msg.proxyIp, msg.proxyPort, cfg.InboundTransparent, msg.secure, msg.protocol)
 
 	//if msg.export {

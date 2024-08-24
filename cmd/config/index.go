@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"flag"
 	"log"
 	"os"
@@ -37,18 +36,18 @@ type Config struct {
 	OutboundTransparent     bool
 	OutboundTransparentIp   string
 	OutboundTransparentPort int
+
+	NacosServers []string `ip:port`
 }
 
-func GetOrReadConfig() (Config, error) {
-
-	if cfg != nil {
-		return *cfg, nil
-	}
+func init() {
 	path := flag.String("c", "", "配置文件路径")
 	flag.Parse()
 
 	if *path == "" {
-		return Config{}, errors.New("配置文件不能为空")
+		log.Fatalf("配置文件不能为空")
+		os.Exit(1)
+		return
 	}
 	data, err := os.ReadFile(*path)
 	if err != nil {
@@ -60,5 +59,8 @@ func GetOrReadConfig() (Config, error) {
 		log.Fatalf("解析 YAML 失败: %v", err)
 	}
 	cfg = &config
-	return config, nil
+}
+
+func GetConfig() Config {
+	return *cfg
 }

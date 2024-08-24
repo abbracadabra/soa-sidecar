@@ -15,15 +15,16 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"test/cmd/config"
+	"test/utils/arrayUtil"
 )
 
-// var NS *NameService = createClient()
+// golang包初始化方法
+func init() {
+	cli = createClient()
+}
 
-var cli = createClient()
-
-// type NameService struct {
-// 	cli naming_client.INamingClient
-// }
+var cli naming_client.INamingClient
 
 func Subscribe(servName string, cb func(services []model.SubscribeService, err error)) {
 	// Subscribe key=serviceName+groupName+cluster
@@ -70,9 +71,10 @@ func RegisterInstance(servName string, ip string, port int, tags map[string]stri
 	data.Set("metadata", string(jsonTags))
 
 	// 创建请求
-	req, err := http.NewRequest("POST", "http://"+ins[0].(string)+":"+strconv.Itoa(ins[1].(int))+"/nacos/v2/ns/instance", bytes.NewBufferString(data.Encode()))
+	insHost := ins[0].(string) + ":" + strconv.Itoa(ins[1].(int))
+	req, err := http.NewRequest("POST", "http://"+insHost+"/nacos/v2/ns/instance", bytes.NewBufferString(data.Encode()))
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	// 设置Content-Type
@@ -85,6 +87,7 @@ func RegisterInstance(servName string, ip string, port int, tags map[string]stri
 		ins[2] = false
 		return err
 	}
+	ins[2] = true
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -98,13 +101,11 @@ func RegisterInstance(servName string, ip string, port int, tags map[string]stri
 	return fmt.Errorf("register instance failed, %s", bodyStr)
 }
 
-func Heartbeat(servName string, ip string, port int, tags map[string]string) {
-	//TODO
-}
-
-func UpdateInstance(name string) {
-	//TODO
-}
+//func Heartbeat(servName string, ip string, port int, tags map[string]string) {
+//}
+//
+//func UpdateInstance(name string) {
+//}
 
 func GetServInfo(servName string) map[string]string {
 	inf, err := cli.GetService(vo.GetServiceParam{
@@ -119,31 +120,33 @@ func GetServInfo(servName string) map[string]string {
 }
 
 func createClient() naming_client.INamingClient {
+	cfg := config.GetConfig()
+	servers := cfg.NacosServers
 	// 创建clientConfig
 	var clientConfig = constant.ClientConfig{
-		NamespaceId:         "e525eafa-f7d7-4029-83d9-008937f9d468", // 如果需要支持多namespace，我们可以创建多个client,它们有不同的NamespaceId。当namespace是public时，此处填空字符串。
+		//NamespaceId:         "e525eafa-f7d7-4029-83d9-008937f9d468", // 如果需要支持多namespace，我们可以创建多个client,它们有不同的NamespaceId。当namespace是public时，此处填空字符串。
 		TimeoutMs:           5000,
 		NotLoadCacheAtStart: true,
-		LogDir:              "/tmp/nacos/log",
-		CacheDir:            "/tmp/nacos/cache",
-		LogLevel:            "debug",
+		//LogDir:              "/tmp/nacos/log",
+		//CacheDir:            "/tmp/nacos/cache",
+		//LogLevel:            "info",
 	}
 
-	// 至少一个ServerConfig
-	var serverConfigs = []constant.ServerConfig{
-		{
-			IpAddr:      "console1.nacos.io",
+	var serverConfigs = arrayUtil.MapSlice(servers, func(addr string) constant.ServerConfig {
+		part := strings.Split(addr, ":")
+		ip := part[0]
+		port, err := strconv.Atoi(part[1])
+		if err != nil {
+			panic(err)
+		}
+
+		return constant.ServerConfig{
+			IpAddr:      ip,
+			Port:        uint64(port),
 			ContextPath: "/nacos",
-			Port:        80,
 			Scheme:      "http",
-		},
-		{
-			IpAddr:      "console2.nacos.io",
-			ContextPath: "/nacos",
-			Port:        80,
-			Scheme:      "http",
-		},
-	}
+		}
+	})
 
 	var namingClient, _ = clients.NewNamingClient(
 		vo.NacosClientParam{
