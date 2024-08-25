@@ -23,7 +23,7 @@ type proxyReq struct {
 	tags     map[string]string
 }
 
-type heartbeatMsg struct {
+type exportServiceMsg struct {
 	ip       string `心跳上报只需提供自身ip端口`
 	port     int
 	servName string
@@ -31,7 +31,7 @@ type heartbeatMsg struct {
 }
 
 var (
-	exportedService = make(map[string]*proxyReq)
+// exportedService = make(map[string]*proxyReq)
 )
 
 func startInboundProxyHandler(w http.ResponseWriter, r *http.Request) {
@@ -49,22 +49,21 @@ func startInboundProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 记录下代理ip和端口
-	exportedService[fmt.Sprintf("%s:%d", msg.ip, msg.port)] = &msg
+	//exportedService[fmt.Sprintf("%s:%d", msg.ip, msg.port)] = &msg
 	respond(w, 0, "ok")
 }
 
 func exportServiceHandler(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(r.Body)
-	var msg heartbeatMsg
+	var msg exportServiceMsg
 	err = json.Unmarshal(data, &msg)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	//心跳上报只需提供自身ip端口
-	proxyReq := exportedService[fmt.Sprintf("%s:%d", msg.ip, msg.port)]
-	err = nameService.RegisterInstance(msg.servName, proxyReq.proxyIp, proxyReq.proxyPort, msg.tags)
+	// 由服务决定要导出代理地址还是自己地址
+	err = nameService.RegisterInstance(msg.servName, msg.ip, msg.port, msg.tags)
 	if err != nil {
 		respond(w, 1, err.Error())
 		return
