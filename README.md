@@ -26,6 +26,6 @@ soa基础设施（服务路由、负载均衡、连接池、限流、熔断、�
 2：注册请求经过sidecar转发到注册中心   
 3：sidecar开了rest api`/exportService`来转发注册请求，这样简化了业务侧的注册参数，底层换注册中心业务也不用改
 
-4、让服务A、B互调，看是否走通
+4、让服务A、B互调
 - 请求域名的格式为：`{service}.soa.proxy.net`，其中`{service}`是目标服务名，sidecar根据`{service}`路由
 - 出口流量要打到sidecar，因此需要把域名解析到sidecar，因此需要修改本地host文件，或者修改公司域名服务器  
