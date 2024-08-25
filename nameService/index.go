@@ -72,7 +72,7 @@ func RegisterInstance(servName string, ip string, port int, tags map[string]stri
 
 	// 创建请求
 	insHost := ins[0].(string) + ":" + strconv.Itoa(ins[1].(int))
-	req, err := http.NewRequest("POST", "http://"+insHost+"/nacos/v2/ns/instance", bytes.NewBufferString(data.Encode()))
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/nacos/v2/ns/instance", insHost), bytes.NewBufferString(data.Encode()))
 	if err != nil {
 		return err
 	}
@@ -95,10 +95,10 @@ func RegisterInstance(servName string, ip string, port int, tags map[string]stri
 	}
 	bodyStr := string(bodyBytes)
 	success := strings.Contains(bodyStr, "success")
-	if success {
-		return nil
+	if !success {
+		return fmt.Errorf("register instance failed, %s", bodyStr)
 	}
-	return fmt.Errorf("register instance failed, %s", bodyStr)
+	return nil
 }
 
 //func Heartbeat(servName string, ip string, port int, tags map[string]string) {

@@ -10,14 +10,13 @@ import (
 	"test/nameService"
 )
 
-type reportServ struct {
-	ip          string
-	port        int
-	transparent bool
-	proxyIp     string
-	proxyPort   int
-	secure      bool
-	protocol    string
+type proxyReq struct {
+	ip        string
+	port      int
+	proxyIp   string
+	proxyPort int
+	secure    bool
+	protocol  string
 	//注册中心参数
 	export   bool
 	servName string
@@ -25,42 +24,64 @@ type reportServ struct {
 }
 
 type heartbeatMsg struct {
-	proxyIp   string
-	proxyPort int
-	servName  string
-	tags      map[string]string
+	ip       string `心跳上报只需提供自身ip端口`
+	port     int
+	servName string
+	tags     map[string]string
 }
 
-func inboundExportHandler(w http.ResponseWriter, r *http.Request) {
+var (
+	exportedService = make(map[string]*proxyReq)
+)
+
+func startInboundProxyHandler(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(r.Body)
-	var msg reportServ
-	err = json.Unmarshal(data, &data)
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	cfg := config.GetConfig()
-	serveProtocolIn(msg.servName, msg.ip, msg.port, msg.proxyIp, msg.proxyPort, cfg.InboundTransparent, msg.secure, msg.protocol)
-
-	//if msg.export {
-	//	nameService.Heartbeat(msg.servName, msg.proxyIp, msg.proxyPort, msg.tags)
-	//}
-}
-
-func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
-	data, err := io.ReadAll(r.Body)
-	var msg heartbeatMsg
+	var msg proxyReq
 	err = json.Unmarshal(data, &msg)
 	if err != nil {
 		fmt.Println(err)
 	}
 
-	nameService.RegisterInstance(msg.servName, msg.proxyIp, msg.proxyPort, msg.tags)
+	cfg := config.GetConfig()
+	err = serveProtocolIn(msg.servName, msg.ip, msg.port, msg.proxyIp, msg.proxyPort, cfg.InboundTransparent, msg.secure, msg.protocol)
+	if err != nil {
+		respond(w, 500, map[string]any{"code": 1, "msg": err.Error()})
+		return
+	}
+	// 记录下代理ip和端口
+	exportedService[fmt.Sprintf("%s:%d", msg.ip, msg.port)] = &msg
+	respond(w, 200, map[string]any{"code": 0})
+}
+
+func exportServiceHandler(w http.ResponseWriter, r *http.Request) {
+	data, err := io.ReadAll(r.Body)
+	var msg heartbeatMsg
+	err = json.Unmarshal(data, &msg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	//心跳上报只需提供自身ip端口
+	proxyReq := exportedService[fmt.Sprintf("%s:%d", msg.ip, msg.port)]
+	nameService.RegisterInstance(msg.servName, proxyReq.proxyIp, proxyReq.proxyPort, msg.tags)
+	respond(w, 200, map[string]any{"code": 0})
+}
+
+func respond(w http.ResponseWriter, status int, body any) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	err := json.NewEncoder(w).Encode(body)
+	if err != nil {
+		http.Error(w, "Failed to encode JSON", http.StatusInternalServerError)
+		return err
+	}
+	return nil
 }
 
 func startConsoleServer(ip string, port int) {
-	http.HandleFunc("/startProxy", inboundExportHandler)
-	http.HandleFunc("/exportService", heartbeatHandler)
+	http.HandleFunc("/startInboundProxy", startInboundProxyHandler)
+	http.HandleFunc("/exportService", exportServiceHandler)
 
 	fmt.Printf("Starting server at %s:%d\n", ip, port)
 	if err := http.ListenAndServe(ip+":"+strconv.Itoa(port), nil); err != nil {
