@@ -45,12 +45,12 @@ func startInboundProxyHandler(w http.ResponseWriter, r *http.Request) {
 	cfg := config.GetConfig()
 	err = serveProtocolIn(msg.servName, msg.ip, msg.port, msg.proxyIp, msg.proxyPort, cfg.InboundTransparent, msg.secure, msg.protocol)
 	if err != nil {
-		respond(w, 500, 1, err.Error())
+		respond(w, 1, err.Error())
 		return
 	}
 	// 记录下代理ip和端口
 	exportedService[fmt.Sprintf("%s:%d", msg.ip, msg.port)] = &msg
-	respond(w, 200, 0, "ok")
+	respond(w, 0, "ok")
 }
 
 func exportServiceHandler(w http.ResponseWriter, r *http.Request) {
@@ -66,16 +66,16 @@ func exportServiceHandler(w http.ResponseWriter, r *http.Request) {
 	proxyReq := exportedService[fmt.Sprintf("%s:%d", msg.ip, msg.port)]
 	err = nameService.RegisterInstance(msg.servName, proxyReq.proxyIp, proxyReq.proxyPort, msg.tags)
 	if err != nil {
-		respond(w, 500, 1, err.Error())
+		respond(w, 1, err.Error())
 		return
 	}
-	respond(w, 200, 0, "ok")
+	respond(w, 0, "ok")
 }
 
-func respond(w http.ResponseWriter, status int, code int, msg string) error {
+func respond(w http.ResponseWriter, code int, msg string) error {
 	body := map[string]any{"code": code, "msg": msg}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+	w.WriteHeader(200)
 	err := json.NewEncoder(w).Encode(body)
 	if err != nil {
 		http.Error(w, "Failed to encode JSON", http.StatusInternalServerError)
