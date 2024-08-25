@@ -20,7 +20,7 @@ soa基础设施（服务路由、负载均衡、连接池、限流、熔断、�
 2、运行nacos，用作注册中心  
 
 3、启动业务服务，这里我们开启一个http echo服务和一个grpc echo服务，每个服务启动完后调下面api：
-- 启动代理(optional)：如果想让sidecar代理我的服务，就调sidecar的rest api`/startInboundProxy`，一般由业务服务自己调
+- 启动代理(optional)：如果想让sidecar代理入口流量，就调sidecar的rest api`/startInboundProxy`，一般由业务服务自己调
 - 注册服务：服务想被代理就注册代理地址，反之注册服务自己地址，这里有三种注册方式都行：  
 1：服务直连注册中心  
 2：注册请求经过sidecar转发到注册中心   
