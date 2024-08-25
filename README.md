@@ -15,7 +15,7 @@ soa基础设施（服务路由、负载均衡、连接池、限流、熔断、�
 - uds
 
 ### 测试
-1、运行sidecar程序
+1、运行sidecar程序`go run ./cmd -c ./test/testConfig.yaml`
 
 2、运行nacos，用作注册中心
 
