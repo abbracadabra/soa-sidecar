@@ -4,7 +4,7 @@ soa基础设施（服务路由、负载均衡、连接池、限流、熔断、�
 - 支持协议：grpc,http1/2,tls  
 - 支持出流量、入流量代理  
 - 支持透明代理  
-- 支持sidecarless 模式  
+- 不仅仅是sidecar，你可以当成普通服务部署（sidecarless？）  
 
 ### todo:  
 - thin sdk
