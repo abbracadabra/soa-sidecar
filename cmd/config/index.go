@@ -17,10 +17,8 @@ type bindAddr struct {
 
 type bindProtocol struct {
 	bindAddr
-	//Transparent bool
 	Secure   bool
 	Protocol string
-	Outbound bool
 }
 
 type Config struct {

@@ -30,10 +30,6 @@ type exportServiceMsg struct {
 	tags     map[string]string
 }
 
-var (
-// exportedService = make(map[string]*proxyReq)
-)
-
 func startInboundProxyHandler(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(r.Body)
 	var msg proxyReq
@@ -48,8 +44,6 @@ func startInboundProxyHandler(w http.ResponseWriter, r *http.Request) {
 		respond(w, 1, err.Error())
 		return
 	}
-	// 记录下代理ip和端口
-	//exportedService[fmt.Sprintf("%s:%d", msg.ip, msg.port)] = &msg
 	respond(w, 0, "ok")
 }
 

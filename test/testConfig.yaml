@@ -1,0 +1,23 @@
+Console: # 控制台
+  Ip: 127.0.0.1
+  Port: 9999
+OutboundProxy:
+  - Ip: 127.0.0.1 # http出口流量代理
+    Port: 8887
+    Secure: false
+    Protocol: http
+  - Ip: 127.0.0.1 # grpc出口流量代理
+    Port: 8888
+    Secure: false
+    Protocol: grpc
+  - Ip: 127.0.0.1 # tls出口流量代理（用sni路由服务）
+    Port: 8889
+    Secure: true
+    Protocol: any
+InboundTransparent: false #不启用透明代理模式
+OutboundTransparent: false #不启用透明代理模式
+NacosServers: #注册中心
+  - 127.0.0.1:8848
+  - 127.0.0.1:8849
+
+
