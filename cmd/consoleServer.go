@@ -45,12 +45,12 @@ func startInboundProxyHandler(w http.ResponseWriter, r *http.Request) {
 	cfg := config.GetConfig()
 	err = serveProtocolIn(msg.servName, msg.ip, msg.port, msg.proxyIp, msg.proxyPort, cfg.InboundTransparent, msg.secure, msg.protocol)
 	if err != nil {
-		respond(w, 500, map[string]any{"code": 1, "msg": err.Error()})
+		respond(w, 500, 1, err.Error())
 		return
 	}
 	// 记录下代理ip和端口
 	exportedService[fmt.Sprintf("%s:%d", msg.ip, msg.port)] = &msg
-	respond(w, 200, map[string]any{"code": 0})
+	respond(w, 200, 0, "ok")
 }
 
 func exportServiceHandler(w http.ResponseWriter, r *http.Request) {
@@ -64,11 +64,16 @@ func exportServiceHandler(w http.ResponseWriter, r *http.Request) {
 
 	//心跳上报只需提供自身ip端口
 	proxyReq := exportedService[fmt.Sprintf("%s:%d", msg.ip, msg.port)]
-	nameService.RegisterInstance(msg.servName, proxyReq.proxyIp, proxyReq.proxyPort, msg.tags)
-	respond(w, 200, map[string]any{"code": 0})
+	err = nameService.RegisterInstance(msg.servName, proxyReq.proxyIp, proxyReq.proxyPort, msg.tags)
+	if err != nil {
+		respond(w, 500, 1, err.Error())
+		return
+	}
+	respond(w, 200, 0, "ok")
 }
 
-func respond(w http.ResponseWriter, status int, body any) error {
+func respond(w http.ResponseWriter, status int, code int, msg string) error {
+	body := map[string]any{"code": code, "msg": msg}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	err := json.NewEncoder(w).Encode(body)
