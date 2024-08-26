@@ -102,6 +102,45 @@ func RegisterInstance(servName string, ip string, port int, tags map[string]stri
 	return nil
 }
 
+func DeregisterInstance(servName string, ip string, port int) error {
+	var ins = choose()
+	// 构建请求数据
+	data := url.Values{}
+	data.Set("serviceName", servName)
+	data.Set("ip", ip)
+	data.Set("port", strconv.Itoa(port))
+
+	// 创建请求
+	insHost := ins[0].(string) + ":" + strconv.Itoa(ins[1].(int))
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("http://%s/nacos/v2/ns/instance", insHost), bytes.NewBufferString(data.Encode()))
+	if err != nil {
+		return err
+	}
+
+	// 设置Content-Type
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	// 发送请求
+	resp, err := client.Do(req)
+	defer resp.Body.Close()
+	if err != nil {
+		ins[2] = false
+		return err
+	}
+	ins[2] = true
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	bodyStr := string(bodyBytes)
+	success := strings.Contains(bodyStr, "success")
+	if !success {
+		return fmt.Errorf("deregister instance failed, %s", bodyStr)
+	}
+	return nil
+}
+
 //func Heartbeat(servName string, ip string, port int, tags map[string]string) {
 //}
 //
@@ -122,7 +161,8 @@ func GetServInfo(servName string) map[string]string {
 
 func createClient() naming_client.INamingClient {
 	cfg := config.GetConfig()
-	sevrs := cfg.NacosServers
+	sevrs := arrayUtil.DeepCopy(cfg.NacosServers)
+	arrayUtil.Shuffle(sevrs)
 	// 创建clientConfig
 	var clientConfig = constant.ClientConfig{
 		//NamespaceId:         "e525eafa-f7d7-4029-83d9-008937f9d468", // 如果需要支持多namespace，我们可以创建多个client,它们有不同的NamespaceId。当namespace是public时，此处填空字符串。
