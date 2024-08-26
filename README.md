@@ -13,6 +13,7 @@ soa基础设施（服务路由、负载均衡、连接池、限流、熔断、�
 - 客户端熔断
 - 流量拓扑
 - uds
+- di:uber-go/dig
 
 ### 使用示例
 1、运行sidecar程序`go run ./cmd -c ./test/testConfig.yaml`  
