@@ -23,8 +23,8 @@ soa基础设施（服务路由、负载均衡、连接池、限流、熔断、�
 - 启动代理(optional)：如果想让sidecar代理入口流量，就调sidecar的rest api`/startInboundProxy`，一般由业务服务自己调
 - 注册服务：服务想被代理就注册代理地址，反之注册服务自己地址，这里有三种注册方式都行：  
 1：服务直连注册中心  
-2：注册请求经过sidecar转发到注册中心   
-3：sidecar开了rest api`/exportService`来转发注册请求，这样简化了业务侧的注册参数，底层换注册中心业务也不用改
+2：把注册中心当成一个upstream cluster，让sidecar把注册请求转发到注册中心   
+3：调sidecar的rest api`/exportService`来转发注册请求，这样简化了业务侧的注册参数，底层换注册中心业务也不用改
 
 4、让服务A、B互调
 - 请求域名的格式为：`{service}.soa.proxy.net`，其中`{service}`是目标服务名，sidecar根据`{service}`路由
