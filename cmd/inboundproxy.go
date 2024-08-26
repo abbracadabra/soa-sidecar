@@ -32,7 +32,7 @@ func startTransparentIn(ip string, port int) error {
 			continue
 		}
 		dstIp := ""
-		dstPort := 0 // todo
+		dstPort := 0 // todo https://gist.github.com/fangdingjun/11e5d63abe9284dc0255a574a76bbcb1
 		spec, ok := inTransInServRule[dstIp+":"+strconv.Itoa(dstPort)]
 		if !ok {
 			return nil
