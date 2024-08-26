@@ -21,7 +21,7 @@ type PoolConn struct {
 }
 
 type Pool struct {
-	idleConns chan *PoolConn
+	idleConns chan *PoolConn `idleConns + deadConns + 在用的conn = max conn size`
 	deadConns chan *PoolConn
 	factory   func() (interface{}, error)
 	closeFunc func(interface{})

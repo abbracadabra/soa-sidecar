@@ -7,11 +7,11 @@ import (
 	"time"
 )
 
-// 不用返还，连接不是独占
 // 独占式的连接用lru扩缩容
 // 共享式的连接用qps扩缩容
 // factory:返回连接、关闭方法、错误
 func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Duration, factory func() (interface{}, error), closeFunc func(interface{})) *Pool {
+	// 连接的并发数>maxConcurrentStream则用其他连接，并发数=0时销毁连接
 	if size <= 0 {
 		panic("size must be greater than 0")
 	}
