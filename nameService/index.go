@@ -24,7 +24,11 @@ func init() {
 	cli = createClient()
 }
 
-var cli naming_client.INamingClient
+var (
+	cli     naming_client.INamingClient
+	client  = &http.Client{}
+	servers = make([][3]any, 3)
+)
 
 func Subscribe(servName string, cb func(services []model.SubscribeService, err error)) {
 	// Subscribe key=serviceName+groupName+cluster
@@ -41,9 +45,6 @@ func Subscribe(servName string, cb func(services []model.SubscribeService, err e
 	})
 	fmt.Println(subscribeErr.Error())
 }
-
-var client = &http.Client{}
-var servers = make([][3]any, 3)
 
 func choose() *[3]any {
 	var ins *[3]any
@@ -121,7 +122,7 @@ func GetServInfo(servName string) map[string]string {
 
 func createClient() naming_client.INamingClient {
 	cfg := config.GetConfig()
-	servers := cfg.NacosServers
+	sevrs := cfg.NacosServers
 	// 创建clientConfig
 	var clientConfig = constant.ClientConfig{
 		//NamespaceId:         "e525eafa-f7d7-4029-83d9-008937f9d468", // 如果需要支持多namespace，我们可以创建多个client,它们有不同的NamespaceId。当namespace是public时，此处填空字符串。
@@ -132,14 +133,25 @@ func createClient() naming_client.INamingClient {
 		//LogLevel:            "info",
 	}
 
-	var serverConfigs = arrayUtil.MapSlice(servers, func(addr string) constant.ServerConfig {
+	// nacos服务地址
+	servers = arrayUtil.MapSlice(sevrs, func(addr string) [3]any {
 		part := strings.Split(addr, ":")
 		ip := part[0]
 		port, err := strconv.Atoi(part[1])
 		if err != nil {
 			panic(err)
 		}
+		return [3]any{ip, port, true}
+	})
 
+	// nacos客户端配置
+	var serverConfigs = arrayUtil.MapSlice(sevrs, func(addr string) constant.ServerConfig {
+		part := strings.Split(addr, ":")
+		ip := part[0]
+		port, err := strconv.Atoi(part[1])
+		if err != nil {
+			panic(err)
+		}
 		return constant.ServerConfig{
 			IpAddr:      ip,
 			Port:        uint64(port),
