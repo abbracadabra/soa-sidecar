@@ -14,7 +14,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"test/utils/servNameUtil"
 )
 
@@ -146,9 +145,9 @@ func (c *phaseHookIn) director(downCtx context.Context, md metadata.MD) (*shared
 func forwardUp2Down(src grpc.ClientStream, dst grpc.ServerStream) chan [2]any {
 	ret := make(chan [2]any, 1)
 	go func() {
-		f := &emptypb.Empty{}
+		var f []byte
 		for i := 0; ; i++ {
-			if err := src.RecvMsg(f); err != nil {
+			if err := src.RecvMsg(&f); err != nil {
 				ret <- [2]any{err, true} // this can be io.EOF which is happy case
 				break
 			}
@@ -178,9 +177,9 @@ func forwardDown2Up(src grpc.ServerStream, dst grpc.ClientStream) chan [2]any {
 	go func() {
 		//protoimpl.UnknownFields 是 protobuf 实现的一部分
 		//如果一个应用程序接收到一个包含未识别字段的消息，然后将该消息转发给其他服务，它可以保留这些未知字段并将它们包括在转发的消息中
-		f := &emptypb.Empty{}
+		var f []byte
 		for i := 0; ; i++ {
-			if err := src.RecvMsg(f); err != nil {
+			if err := src.RecvMsg(&f); err != nil {
 				ret <- [2]any{err, false} // this can be io.EOF which is happy case
 				break
 			}
