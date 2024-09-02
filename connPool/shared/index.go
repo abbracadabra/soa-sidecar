@@ -7,9 +7,7 @@ import (
 	"time"
 )
 
-// 独占式的连接用lru扩缩容
-// 共享式的连接用qps扩缩容
-// factory:返回连接、关闭方法、错误
+// 从左到右，重复使用一个健康的连接，直至连接的并发请求上限，若所有的连接达到并发上限，则恢复并使用unhealthy连接，若unhealthy连接都没有则用达到并发上限的连接
 func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Duration, factory func() (interface{}, error), closeFunc func(interface{})) *Pool {
 	// 连接的并发数>maxConcurrentStream则用其他连接，并发数=0时销毁连接
 	if size <= 0 {
