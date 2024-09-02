@@ -81,7 +81,7 @@ func createHandle(phaseHook phaseHook) grpc.StreamHandler {
 				} else {
 					// however, we may have gotten a receive error (stream disconnected, a read error etc) in which case we need to cancel the clientStream to the backend, let all of its goroutines be freed up by the CancelFunc and exit with an error to the stack
 					if isUpstreamErr {
-						connLease.Unhealthy()
+						connLease.Unhealthy() // todo grpc会自动重连，是否需要删掉所有Unhealthy、upCancel
 					}
 					upCancel()
 					return status.Errorf(codes.Internal, "failed proxying d2u: %v", err)
