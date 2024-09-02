@@ -3,6 +3,7 @@ package grpcc
 import (
 	"context"
 	"errors"
+	"google.golang.org/grpc/connectivity"
 	"io"
 	"net"
 	"test/cluster"
@@ -126,6 +127,11 @@ func (*phaseHookOut) director(downCtx context.Context, md metadata.MD) (*shared.
 	if err != nil {
 		return nil, err
 	}
+	if lease.GetConn().(*grpc.ClientConn).GetState() == connectivity.Shutdown {
+		lease.Unhealthy()
+		lease.Return()
+		return nil, errors.New("no grpc connection")
+	}
 	return lease, nil
 }
 
@@ -138,6 +144,11 @@ func (c *phaseHookIn) director(downCtx context.Context, md metadata.MD) (*shared
 	lease, err := c.ins.Pool.(*shared.Pool).Get(time.Second * 2)
 	if err != nil {
 		return nil, err
+	}
+	if lease.GetConn().(*grpc.ClientConn).GetState() == connectivity.Shutdown {
+		lease.Unhealthy()
+		lease.Return()
+		return nil, errors.New("no grpc connection")
 	}
 	return lease, nil
 }
