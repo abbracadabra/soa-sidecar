@@ -1,6 +1,6 @@
 package localInstance
 
-var InstanceMap = make(map[string]*LocalInstance)
+//var InstanceMap = make(map[string]*LocalInstance)
 
 // func FindByPort(ip string, port int) *LocalInstance {
 // 	return InstanceMap[ip+":"+strconv.Itoa(port)]

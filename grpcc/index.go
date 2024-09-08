@@ -52,6 +52,11 @@ func createHandle(phaseHook phaseHook) grpc.StreamHandler {
 		md, _ := metadata.FromIncomingContext(downCtx) // header,是个copy
 		// outCtx := metadata.NewOutgoingContext(serverStream.Context(), md)
 
+		err := phaseHook.filter(md)
+		if err != nil {
+			return err
+		}
+
 		connLease, err := phaseHook.director(downCtx, md)
 		if err != nil {
 			return err
@@ -107,8 +112,14 @@ func createHandle(phaseHook phaseHook) grpc.StreamHandler {
 	}
 }
 
+type grpcStatusError struct{ status *status.Status }
+
+func (e *grpcStatusError) GRPCStatus() *status.Status { return e.status }
+func (e *grpcStatusError) Error() string              { return e.status.Code().String() + "_" + e.status.Message() }
+
 type phaseHook interface {
 	director(downCtx context.Context, md metadata.MD) (*shared.Lease, error)
+	filter(metadata.MD) error // for Error Model,return grpcStatusError https://cloud.google.com/apis/design/errors
 }
 type phaseHookOut struct {
 	phaseHook
@@ -128,6 +139,9 @@ func (*phaseHookOut) director(downCtx context.Context, md metadata.MD) (*shared.
 	}
 	return lease, nil
 }
+func (*phaseHookOut) filter(md metadata.MD) error {
+	return nil
+}
 
 type phaseHookIn struct {
 	phaseHook
@@ -140,6 +154,9 @@ func (c *phaseHookIn) director(downCtx context.Context, md metadata.MD) (*shared
 		return nil, err
 	}
 	return lease, nil
+}
+func (c *phaseHookIn) filter(md metadata.MD) error {
+	return nil
 }
 
 func forwardUp2Down(src grpc.ClientStream, dst grpc.ServerStream) chan [2]any {
