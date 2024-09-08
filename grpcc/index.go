@@ -53,12 +53,12 @@ func createHandle(phaseHook phaseHook) grpc.StreamHandler {
 
 		err := phaseHook.filter(md)
 		if err != nil {
-			return err
+			return toGrpcStatusError(err)
 		}
 
 		connLease, err := phaseHook.director(downCtx, md)
 		if err != nil {
-			return err
+			return toGrpcStatusError(err)
 		}
 		defer connLease.Return()
 
@@ -68,7 +68,7 @@ func createHandle(phaseHook phaseHook) grpc.StreamHandler {
 		// ctx可以操控让upstream关闭，这里ctx的parent是serverStream的ctx，serverStream完了upstream也完，ctx不影响conn
 		upstream, err := grpc.NewClientStream(upCtx, desc, connLease.GetConn().(*grpc.ClientConn), fullMethodName) // 本身不产生网络传输
 		if err != nil {
-			return err
+			return toGrpcStatusError(err)
 		}
 		// Explicitly *do not close* s2cErrChan and c2sErrChan, otherwise the select below will not terminate. Channels do not have to be closed, it is just a control flow mechanism, see https://groups.google.com/forum/#!msg/golang-nuts/pZwdYRGxCIk/qpbHxRRPJdUJ
 		d2uErrChan := forwardDown2Up(downstream, upstream)
@@ -111,14 +111,9 @@ func createHandle(phaseHook phaseHook) grpc.StreamHandler {
 	}
 }
 
-type grpcStatusError struct{ status *status.Status }
-
-func (e *grpcStatusError) GRPCStatus() *status.Status { return e.status }
-func (e *grpcStatusError) Error() string              { return e.status.Code().String() + "_" + e.status.Message() }
-
 type phaseHook interface {
 	director(downCtx context.Context, md metadata.MD) (*shared.Lease, error)
-	filter(metadata.MD) error // for Error Model,return grpcStatusError https://cloud.google.com/apis/design/errors
+	filter(metadata.MD) error
 }
 type phaseHookOut struct {
 	phaseHook

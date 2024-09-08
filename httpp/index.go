@@ -42,14 +42,14 @@ func createHandler(hook phaseHook) func(w http.ResponseWriter, r *http.Request) 
 
 		err := hook.filter(r)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			respondError(err, w)
 			return
 		}
 
 		req, err := hook.toReq(r)
 
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			respondError(err, w)
 			return
 		}
 
@@ -82,6 +82,14 @@ func createHandler(hook phaseHook) func(w http.ResponseWriter, r *http.Request) 
 		success = true
 	}
 
+}
+
+func respondError(err error, w http.ResponseWriter) {
+	if ge, ok := err.(*GatewayError); ok {
+		http.Error(w, ge.Error(), ge.Code())
+		return
+	}
+	http.Error(w, err.Error(), http.StatusBadGateway)
 }
 
 func ServeListenerOut(ln net.Listener) {
