@@ -22,7 +22,7 @@ func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalI
 	//http1
 	var err error
 	server := &http.Server{
-		Handler: http.HandlerFunc(createHandler(&inboundCycle{ins: ins, servName: servName})),
+		Handler: http.HandlerFunc(createHandler(&phaseHookIn{ins: ins, servName: servName})),
 	}
 	//add http2 support to http1 server，这样能服务http1和2，http2.Server只支持http2
 	err = http2.ConfigureServer(server, &http2.Server{})
@@ -36,9 +36,15 @@ func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalI
 	}
 }
 
-func createHandler(hook LifeCycle) func(w http.ResponseWriter, r *http.Request) {
+func createHandler(hook phaseHook) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+
+		err := hook.filter(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
 		req, err := hook.toReq(r)
 
@@ -83,7 +89,7 @@ func ServeListenerOut(ln net.Listener) {
 	//http1
 	var err error
 	server := &http.Server{
-		Handler: http.HandlerFunc(createHandler(&outboundCycle{})),
+		Handler: http.HandlerFunc(createHandler(&phaseHookOut{})),
 	}
 	//add http2 support to http1 server，这样能服务http1和2，http2.Server只支持http2
 	err = http2.ConfigureServer(server, &http2.Server{})
@@ -107,15 +113,16 @@ var client = &http.Client{
 	Transport: tr,
 }
 
-type LifeCycle interface {
+type phaseHook interface {
 	toReq(*http.Request) (*http.Request, error)
+	filter(r *http.Request) error
 }
 
-type outboundCycle struct {
-	LifeCycle
+type phaseHookOut struct {
+	phaseHook
 }
 
-func (c *outboundCycle) toReq(r *http.Request) (*http.Request, error) {
+func (c *phaseHookOut) toReq(r *http.Request) (*http.Request, error) {
 	servName := servNameUtil.ExtractServName(r.Header.Get("Host"))
 	cls := cluster.GetOrCreate(servName)                               //集群
 	ins := cls.Choose(&cluster.RouteInfo{Color: r.Header.Get("lane")}) //实例
@@ -127,13 +134,13 @@ func (c *outboundCycle) toReq(r *http.Request) (*http.Request, error) {
 	return http.NewRequest(r.Method, getFullURL(r, ins.IP+":"+strconv.Itoa(ins.Port)), r.Body)
 }
 
-type inboundCycle struct {
-	LifeCycle
+type phaseHookIn struct {
+	phaseHook
 	servName string
 	ins      *localInstance.LocalInstance
 }
 
-func (c *inboundCycle) toReq(r *http.Request) (*http.Request, error) {
+func (c *phaseHookIn) toReq(r *http.Request) (*http.Request, error) {
 	ins := c.ins
 	return http.NewRequest(r.Method, getFullURL(r, ins.Ip+":"+strconv.Itoa(ins.Port)), r.Body)
 }

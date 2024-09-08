@@ -49,8 +49,7 @@ func createHandle(phaseHook phaseHook) grpc.StreamHandler {
 		}
 		// We require that the director's returned context inherits from the serverStream.Context().
 
-		md, _ := metadata.FromIncomingContext(downCtx) // header,是个copy
-		// outCtx := metadata.NewOutgoingContext(serverStream.Context(), md)
+		md, _ := metadata.FromIncomingContext(downCtx) // get header copy
 
 		err := phaseHook.filter(md)
 		if err != nil {
