@@ -7,142 +7,68 @@ import (
 	"time"
 )
 
-// 从左到右，重复使用一个健康的连接，直至连接的并发请求上限，若所有的连接达到并发上限，则恢复并使用unhealthy连接，若unhealthy连接都没有则用达到并发上限的连接
-func NewPool(size, initSize int, maxConcurrentStream int32, maxIdleTime time.Duration, factory func() (interface{}, error), closeFunc func(interface{})) *Pool {
-	// 连接的并发数>maxConcurrentStream则用其他连接，并发数=0时销毁连接
-	if size <= 0 {
-		panic("size must be greater than 0")
-	}
-	if maxConcurrentStream <= 0 {
-		panic("maxConcurrentStream must be greater than 0")
-	}
-	if factory == nil {
-		panic("factory must be not nil")
-	}
-	p := &Pool{
-		factory: factory,
-		conns:   make([]*PoolConn, size),
-		// locks:               make([]sync.Mutex, size),
-		maxConcurrentStream: maxConcurrentStream,
-		closeFunc:           closeFunc,
-	}
-
-	for i, _ := range p.conns {
-		p.conns[i] = &PoolConn{
-			healthy: false,
-			idx:     i,
-			pool:    p,
-		}
-	}
-	go func() {
-		for i := 0; i < initSize; i++ {
-			func() {
-				c := p.conns[i]
-				c.Lock()
-				defer c.Unlock()
-				if c.healthy {
-					return
-				}
-				newConn, err := factory()
-				if err != nil {
-					return
-				}
-				newPc := &PoolConn{
-					healthy: true,
-					idx:     c.idx,
-					pool:    c.pool,
-					Conn:    newConn,
-				}
-				p.conns[i] = newPc
-			}()
-		}
-	}()
-	go func() {
-		ticker := time.NewTicker(maxIdleTime)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			var close []interface{}
-			func() {
-				p.Lock()
-				defer p.Unlock()
-				for _, c := range p.conns {
-					if c.concurrentStream <= 0 && c.healthy {
-						c.healthy = false
-						close = append(close, c.Conn)
-					}
-				}
-			}()
-			for _, gc := range close {
-				p.closeFunc(gc)
-			}
-		}
-	}()
-	return p
-}
-
-type Lease struct {
+type Lease[T any] struct {
 	healthy bool
-	conn    *PoolConn
+	conn    *PoolConn[T]
 }
 
-func (l *Lease) GetConn() interface{} {
+func (l *Lease[T]) GetConn() interface{} {
 	return l.conn.Conn
 }
 
-func (l *Lease) Unhealthy() {
+func (l *Lease[T]) Unhealthy() {
 	l.healthy = false
 }
 
-func (l *Lease) Return() {
+func (l *Lease[T]) Return() {
 	l.conn.onLeaseReturn(l.healthy)
 }
 
-type PoolConn struct {
+type PoolConn[T any] struct {
 	sync.Mutex
 	healthy          bool
 	idx              int // 在array中的位置
-	pool             *Pool
+	pool             *Pool[T]
 	Conn             interface{}
 	concurrentStream int32
 	// leaseBeginCb     func() // ??
 	// leaseEndCb       func() // ??
 }
 
-func (pc *PoolConn) acquireLease() *Lease {
+func (pc *PoolConn[T]) acquireLease() *Lease[T] {
 	atomic.AddInt32(&pc.concurrentStream, 1)
-	l := &Lease{conn: pc, healthy: true}
+	l := &Lease[T]{conn: pc, healthy: true}
 	// pc.leaseBeginCb()
 	return l
 }
 
-func (pc *PoolConn) onLeaseReturn(healthy bool) {
+func (pc *PoolConn[T]) onLeaseReturn(healthy bool) {
 	// defer pc.leaseEndCb()
 	defer atomic.AddInt32(&pc.concurrentStream, -1)
 	pc.healthy = healthy
 	if !healthy {
-		pc.pool.closeFunc(pc.Conn)
+		pc.pool.onConnClose(pc.Conn)
 	}
 }
 
-type Pool struct {
+type Pool[T any] struct {
 	sync.Mutex
-	factory             func() (interface{}, error)
-	conns               []*PoolConn
+	factory             func() (T, error)
+	conns               []*PoolConn[T]
 	maxConcurrentStream int32
-	closeFunc           func(interface{})
+	onConnClose         func(T)
 }
 
-func (p *Pool) Close() error {
+func (p *Pool[T]) Close() error {
 	p.Lock()
 	defer p.Unlock()
 	for _, pc := range p.conns {
-		p.closeFunc(pc.Conn)
+		p.onConnClose(pc.Conn)
 	}
 	return nil
 }
-func (p *Pool) Get(waitTime time.Duration) (*Lease, error) {
-	var conn *Lease
+func (p *Pool[T]) Get(waitTime time.Duration) (*Lease[T], error) {
+	var conn *Lease[T]
 	var err error
 
 	retries := 2          // Maximum number of retries
@@ -168,12 +94,12 @@ func (p *Pool) Get(waitTime time.Duration) (*Lease, error) {
 }
 
 // todo 是否全搞成ctx
-func (p *Pool) tryGet() (*Lease, error) {
-	c1, c2, c3 := func() (*PoolConn, *PoolConn, *PoolConn) {
+func (p *Pool[T]) tryGet() (*Lease[T], error) {
+	c1, c2, c3 := func() (*PoolConn[T], *PoolConn[T], *PoolConn[T]) {
 		p.Lock()
 		defer p.Unlock()
-		var dead *PoolConn
-		var defaultt *PoolConn
+		var dead *PoolConn[T]
+		var defaultt *PoolConn[T]
 		for i := 0; i < len(p.conns); i++ {
 			pc := p.conns[i]
 			if pc.healthy && pc.concurrentStream <= p.maxConcurrentStream {
@@ -202,7 +128,7 @@ func (p *Pool) tryGet() (*Lease, error) {
 		if err != nil {
 			return nil, err
 		}
-		newC2 := &PoolConn{
+		newC2 := &PoolConn[T]{
 			healthy: true,
 			idx:     c2.idx,
 			pool:    c2.pool,

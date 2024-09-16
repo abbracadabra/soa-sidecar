@@ -1,5 +1,5 @@
 package types
 
 type Closable interface {
-	Close()
+	Close() error
 }

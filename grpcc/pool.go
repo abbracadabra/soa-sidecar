@@ -16,7 +16,7 @@ import (
 
 func PoolFactoryOut(cls *cluster.Cluster, ins *cluster.Instance) (types.Closable, error) {
 	// todo get service info/config
-	p := shared.NewPool(1, 1, 9999, time.Minute*1, func() (interface{}, error) {
+	p := shared.NewPool(1, 1, 9999, time.Minute*1, func() (*grpc.ClientConn, error) {
 		ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
 		cc, err := grpc.DialContext(ctx, ins.IP+":"+strconv.Itoa(ins.Port), grpc.WithCodec(codec.Codec()), grpc.WithInsecure())
 		if err != nil {
@@ -25,14 +25,14 @@ func PoolFactoryOut(cls *cluster.Cluster, ins *cluster.Instance) (types.Closable
 
 		return cc, nil
 
-	}, func(conn interface{}) {
-		conn.(*grpc.ClientConn).Close()
+	}, func(conn *grpc.ClientConn) {
+		conn.Close()
 	})
 	return p, nil
 }
 
 func PoolFactoryIn(ins *localInstance.LocalInstance) (interface{}, error) {
-	p := shared.NewPool(1, 1, 9999, time.Minute*1, func() (interface{}, error) {
+	p := shared.NewPool(1, 1, 9999, time.Minute*1, func() (*grpc.ClientConn, error) {
 		ctx, _ := context.WithTimeout(context.Background(), time.Second*3)
 		cc, err := grpc.DialContext(ctx, ins.Ip+":"+strconv.Itoa(ins.Port), grpc.WithCodec(codec.Codec()), grpc.WithInsecure(), grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                10 * time.Second,
@@ -45,8 +45,8 @@ func PoolFactoryIn(ins *localInstance.LocalInstance) (interface{}, error) {
 
 		return cc, nil
 
-	}, func(conn interface{}) {
-		conn.(*grpc.ClientConn).Close()
+	}, func(conn *grpc.ClientConn) {
+		conn.Close()
 	})
 	return p, nil
 }

@@ -42,7 +42,6 @@ func (cls *Cluster) GetInstances() []*Instance {
 	return cls.instances
 }
 
-// 是否要把lb放成cls的属性
 func (c *Cluster) Choose(routeInfo interface{}) *Instance {
 	return c.lb.pick(routeInfo)
 }
