@@ -127,19 +127,19 @@ func (pc *PoolConn) onLeaseReturn(healthy bool) {
 
 type Pool struct {
 	sync.Mutex
-	factory func() (interface{}, error)
-	conns   []*PoolConn
-	// locks               []sync.Mutex
+	factory             func() (interface{}, error)
+	conns               []*PoolConn
 	maxConcurrentStream int32
 	closeFunc           func(interface{})
 }
 
-func (p *Pool) Shutdown() {
+func (p *Pool) Close() error {
 	p.Lock()
 	defer p.Unlock()
 	for _, pc := range p.conns {
 		p.closeFunc(pc.Conn)
 	}
+	return nil
 }
 func (p *Pool) Get(waitTime time.Duration) (*Lease, error) {
 	var conn *Lease

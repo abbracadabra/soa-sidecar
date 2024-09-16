@@ -4,7 +4,7 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/model"
 	"strconv"
 	"sync"
-	"test/connPool/shared"
+	"test/types"
 )
 
 type InstanceStatus int
@@ -18,18 +18,22 @@ type Instance struct {
 	IP         string
 	Port       int
 	Status     InstanceStatus
-	Pool       interface{}
+	Pool       types.Closable
 	Meta       map[string]string
 	statistics map[string]any
-	//idc todo
+}
+
+func (ins *Instance) onRemoved() {
+	if ins.Pool != nil {
+		ins.Pool.Close()
+	}
 }
 
 type Cluster struct {
 	sync.Mutex
-	initialized bool
 	servName    string
 	instances   []*Instance
-	lb          InstanceRouter
+	lb          LoadBalancer
 	poolFactory PoolFactory
 	meta        map[string]string
 }
@@ -40,7 +44,7 @@ func (cls *Cluster) GetInstances() []*Instance {
 
 // 是否要把lb放成cls的属性
 func (c *Cluster) Choose(routeInfo interface{}) *Instance {
-	return c.lb(routeInfo)
+	return c.lb.pick(routeInfo)
 }
 
 func (c *Cluster) Add(ip string, port int, meta map[string]string) error {
@@ -67,10 +71,9 @@ func (c *Cluster) Update(services []model.SubscribeService) error {
 	c.Lock()
 	defer c.Unlock()
 	unchanged, added, removed := diff(c.instances, services)
-	//grpc strategy ??
 	for _, del := range removed {
 		del.Status = REMOVED
-		del.Pool.(*shared.Pool).Shutdown()
+		del.onRemoved()
 	}
 	for _, add := range added {
 		newIns := Instance{
@@ -89,6 +92,7 @@ func (c *Cluster) Update(services []model.SubscribeService) error {
 		unchanged = append(unchanged, &newIns)
 	}
 	c.instances = unchanged
+	c.lb.onClusterInstanceChanged() //通知loadbalancer
 	return nil
 }
 
@@ -131,8 +135,7 @@ func diff(cached []*Instance, latest []model.SubscribeService) ([]*Instance, []*
 	return shared, newServices, removed
 }
 
-//type InstanceRouterCreator func(*Cluster) InstanceRouter
-
-type PoolFactory func(*Cluster, *Instance) (interface{}, error)
-
-type InstanceRouter func(interface{}) *Instance
+type LoadBalancer interface {
+	pick(routeInfo interface{}) *Instance
+	onClusterInstanceChanged()
+}

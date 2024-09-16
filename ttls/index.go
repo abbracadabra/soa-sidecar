@@ -12,6 +12,10 @@ import (
 	"test/utils/servNameUtil"
 )
 
+func init() {
+	cluster.RegisterLoadBalancerFactory("tls", cluster.NewDefaultLoadBalancer)
+}
+
 func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalInstance) {
 	for {
 		conn, err := ln.Accept()

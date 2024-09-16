@@ -17,6 +17,10 @@ import (
 	"golang.org/x/net/http2"
 )
 
+func init() {
+	cluster.RegisterLoadBalancerFactory("http", cluster.NewDefaultLoadBalancer)
+}
+
 func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalInstance) {
 	defer ln.Close()
 	//http1

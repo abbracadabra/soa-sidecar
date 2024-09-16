@@ -65,22 +65,6 @@ func exportServiceHandler(w http.ResponseWriter, r *http.Request) {
 	respond(w, 0, "ok")
 }
 
-func unExportServiceHandler(w http.ResponseWriter, r *http.Request) {
-	data, err := io.ReadAll(r.Body)
-	var msg exportServiceMsg
-	err = json.Unmarshal(data, &msg)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	err = nameService.RegisterInstance(msg.servName, msg.ip, msg.port)
-	if err != nil {
-		respond(w, 1, err.Error())
-		return
-	}
-	respond(w, 0, "ok")
-}
-
 func respond(w http.ResponseWriter, code int, msg string) error {
 	body := map[string]any{"code": code, "msg": msg}
 	w.Header().Set("Content-Type", "application/json")

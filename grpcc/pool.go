@@ -7,13 +7,14 @@ import (
 	"test/codec"
 	"test/connPool/shared"
 	"test/localInstance"
+	"test/types"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 )
 
-func PoolFactoryOut(cls *cluster.Cluster, ins *cluster.Instance) (interface{}, error) {
+func PoolFactoryOut(cls *cluster.Cluster, ins *cluster.Instance) (types.Closable, error) {
 	// todo get service info/config
 	p := shared.NewPool(1, 1, 9999, time.Minute*1, func() (interface{}, error) {
 		ctx, _ := context.WithTimeout(context.Background(), time.Second*3)

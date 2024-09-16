@@ -21,6 +21,11 @@ var (
 	desc = &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}
 )
 
+func init() {
+	cluster.RegisterPoolFactoryOut("grpc", PoolFactoryOut)
+	cluster.RegisterLoadBalancerFactory("grpc", cluster.NewDefaultLoadBalancer)
+}
+
 // https://github.com/mwitkow/grpc-proxy/blob/master/proxy/handler.go
 func ServeListenerIn(ln net.Listener, servName string, ins *localInstance.LocalInstance) {
 	defer ln.Close()
